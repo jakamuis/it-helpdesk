@@ -1,0 +1,53 @@
+services:
+  glpidb:
+    image: mariadb:10.11
+    container_name: glpi_db
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: glpidb
+      MYSQL_USER: glpi
+      MYSQL_PASSWORD: glpi_password
+    volumes:
+      - glpi_db_data:/var/lib/mysql
+    restart: always
+
+  glpi:
+    image: elestio/glpi:latest
+    platform: linux/amd64
+    container_name: glpi_app
+    ports:
+      - "8080:80"
+    environment:
+      - TIMEZONE=Asia/Jakarta
+      - GLPI_DB_HOST=glpidb
+      - GLPI_DB_PORT=3306
+      - GLPI_DB_NAME=glpidb
+      - GLPI_DB_USER=glpi
+      - GLPI_DB_PASSWORD=glpi_password
+    volumes:
+      - glpi_data:/var/www/html/glpi
+    depends_on:
+      - glpidb
+    restart: always
+
+  waha:
+    image: devlikeapro/waha:latest
+    platform: linux/amd64
+    container_name: waha_local
+    ports:
+      - "3001:3000"
+    environment:
+      - WAHA_API_KEY=helpdesk123
+      - WAHA_DASHBOARD_USERNAME=admin
+      - WAHA_DASHBOARD_PASSWORD=admin123
+      - WHATSAPP_SWAGGER_USERNAME=admin
+      - WHATSAPP_SWAGGER_PASSWORD=admin123
+      - WHATSAPP_DEFAULT_ENGINE=WEBJS
+      - WAHA_PRINT_QR=True
+    volumes:
+      - ./waha-data:/app/.sessions
+    restart: always
+
+volumes:
+  glpi_db_data:
+  glpi_data:
