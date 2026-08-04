@@ -23,3 +23,4 @@ waha-data/
 .vscode/*
 !.vscode/settings.json
 .idea/
+asset-sync/data/service_account.json

@@ -1,0 +1,18 @@
+services:
+  asset-sync:
+    build: .
+    container_name: asset_sync_service
+    ports:
+      - "8555:8000"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - glpi_default
+
+networks:
+  glpi_default:
+    external: true
