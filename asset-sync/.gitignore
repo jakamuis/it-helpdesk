@@ -1,0 +1,10 @@
+venv/
+.env
+data/
+docs/
+*.db
+*.xlsx
+*.csv
+__pycache__/
+*.pyc
+*.md
