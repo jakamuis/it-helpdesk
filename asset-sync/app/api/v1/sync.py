@@ -19,8 +19,13 @@ async def sync_asset(
     request: AssetSyncRequest, 
     service: SyncService = Depends(get_sync_service)
 ):
-    response = await service.process_sync(request)
+    # This endpoint is intentionally read-only. Approved batch writes use the
+    # manifest-gated path in SyncService.run_batch_sync instead.
+    response = await service.process_sync(request, dry_run=True)
     
+    if response.status == "blocked":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=response.message)
+
     if response.status == "error":
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=response.message)
         

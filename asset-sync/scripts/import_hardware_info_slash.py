@@ -1,6 +1,28 @@
+"""Quarantined historical Registration Asset GLPI importer."""
+
+import sys
+
+
+POLICY_MESSAGE = (
+    "BLOCKED: Registration Asset is comparison-only; GLPI mutations must use "
+    "the authoritative Datasheet workflow."
+)
+POLICY_EXIT_CODE = 78
+
+
+def main() -> int:
+    """Refuse this retired importer before loading Excel or GLPI dependencies."""
+    print(POLICY_MESSAGE, file=sys.stderr)
+    return POLICY_EXIT_CODE
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+# Historical implementation below. Keep it unreachable and non-dispatchable.
 import asyncio
 import os
-import sys
 import pandas as pd
 import httpx
 import pymysql
@@ -23,7 +45,9 @@ async def get_or_create(client, glpi, endpoint, field, value):
         return json_data.get("id", 0)
     return 0
 
-async def main():
+async def _historical_registration_asset_mutation_disabled():
+    raise RuntimeError(POLICY_MESSAGE)
+
     glpi = GLPIClient()
     excel_path = "/app/docs/Samator Registration Asset 1.0_Remaining.xlsx"
     if not os.path.exists(excel_path):
@@ -104,6 +128,3 @@ async def main():
 
     await glpi.kill_session()
     logger.info("Hardware sync for slash parsed assets completed successfully.")
-
-if __name__ == "__main__":
-    asyncio.run(main())

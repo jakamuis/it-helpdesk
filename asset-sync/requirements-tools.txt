@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Optional, local-only Registration Asset comparison utilities.
+# These dependencies are intentionally excluded from the runtime image.
+pandas==2.3.3
+openpyxl==3.1.5

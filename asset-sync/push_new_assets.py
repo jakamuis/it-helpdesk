@@ -1,7 +1,37 @@
+"""Quarantined historical Registration Asset importer.
+
+The Registration Asset workbook is comparison-only.  The authoritative asset
+source is the Datasheet, so this file intentionally has no mutating entrypoint.
+The historical implementation remains below for audit/code archaeology.
+"""
+
+import sys
+
+
+POLICY_MESSAGE = (
+    "BLOCKED: Registration Asset is comparison-only; asset creation must use "
+    "the authoritative Datasheet workflow."
+)
+POLICY_EXIT_CODE = 78
+
+
+def main() -> int:
+    """Refuse the retired importer without loading Excel or GLPI dependencies."""
+    print(POLICY_MESSAGE, file=sys.stderr)
+    return POLICY_EXIT_CODE
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+# Historical implementation below.  Keep it unreachable and non-dispatchable.
 import asyncio
+
 import httpx
 import pandas as pd
 from loguru import logger
+
 from app.services.glpi_client import GLPIClient
 
 def clean_string(val):
@@ -9,7 +39,9 @@ def clean_string(val):
         return ""
     return str(val).strip()
 
-async def main():
+async def _historical_registration_asset_import_disabled():
+    raise RuntimeError(POLICY_MESSAGE)
+
     glpi = GLPIClient()
     # Handle docker internal host resolving for local script run
     glpi.base_url = glpi.base_url.replace("host.docker.internal", "localhost")
@@ -168,6 +200,3 @@ async def main():
     logger.info(f"Finished pushing. Processed {total} rows.")
     logger.info(f"Successfully created {pushed} NEW assets.")
     await glpi.kill_session()
-
-if __name__ == "__main__":
-    asyncio.run(main())

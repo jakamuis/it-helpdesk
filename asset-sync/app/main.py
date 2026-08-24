@@ -6,6 +6,7 @@ from app.api.v1 import sync
 from app.api import health
 from app.core.database import init_db
 from app.core.scheduler import setup_scheduler, scheduler as apscheduler
+from app.version import __version__
 from contextlib import asynccontextmanager
 import sys
 
@@ -15,16 +16,20 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database...")
     await init_db()
     
-    logger.info("Starting background scheduler...")
-    setup_scheduler()
-    apscheduler.start()
+    if settings.SYNC_ENABLED:
+        logger.info("Starting background scheduler...")
+        setup_scheduler()
+        apscheduler.start()
+    else:
+        logger.warning("Weekly asset sync scheduler is disabled (SYNC_ENABLED=false).")
     
     yield
     # Shutdown
     logger.info("Shutting down...")
-    apscheduler.shutdown()
+    if apscheduler.running:
+        apscheduler.shutdown()
 
-app = FastAPI(title="Asset Management Sync Service", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Asset Management Sync Service", version=__version__, lifespan=lifespan)
 
 # Configure logger
 logger.remove()

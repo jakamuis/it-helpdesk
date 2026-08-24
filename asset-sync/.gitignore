@@ -5,6 +5,17 @@ docs/
 *.db
 *.xlsx
 *.csv
+server_setup_and_sync.sh
+.coverage
+.pytest_cache/
+.DS_Store
+/test_*.py
+/check_*.py
+/count_*.py
+/delete_*.py
+/identify_*.py
+/find_search_option.py
+/sample_kapasitas.py
 __pycache__/
 *.pyc
 *.md
