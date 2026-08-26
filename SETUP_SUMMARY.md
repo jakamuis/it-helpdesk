@@ -16,8 +16,7 @@ Your local **GLPI** environment, **WAHA (WhatsApp API)** gateway, and **WAHA ↔
 
 - **WAHA (WhatsApp HTTP API)**: `devlikeapro/waha:latest`
   - **URL & Dashboard**: [http://localhost:3001/dashboard](http://localhost:3001/dashboard)
-  - **API Key**: `helpdesk123`
-  - **Dashboard Credentials**: Username: `admin` | Password: `admin123`
+  - **API Key and Dashboard Credentials**: configured in the ignored root `.env`
   - **Session Data**: Synced to `./waha-data` from server.
   - **Status**: Running (`Up`)
 
@@ -27,13 +26,11 @@ Your local **GLPI** environment, **WAHA (WhatsApp API)** gateway, and **WAHA ↔
 
 Located at: `wa-glpi/`
 
-- **Main Script**: [wa-glpi/app.py](file:///Users/jaka/Documents/Project/GLPI/wa-glpi/app.py)
-- **Active Tokens**:
+- **Main Script**: [`wa-glpi/app.py`](wa-glpi/app.py)
+- **Runtime Configuration**:
   - `GLPI_URL`: `http://localhost:8080/apirest.php`
-  - `GLPI_APP_TOKEN`: `J9IMyiiYAOVBc8GNCiZrwKT4e67SRpA1iDuPnbKj`
-  - `GLPI_USER_TOKEN`: `Revolus1!234`
   - `WAHA_URL`: `http://localhost:3001`
-  - `WAHA_API_KEY`: `helpdesk123`
+  - `GLPI_APP_TOKEN`, `GLPI_USER_TOKEN`, and `WAHA_API_KEY`: configured in the ignored root `.env`
 - **Feature Capabilities**:
   - Receives incoming WhatsApp messages from WAHA.
   - Automatically creates new **GLPI Tickets**.
@@ -92,10 +89,10 @@ If you ever need to re-fetch database dumps or files from the remote server:
 | :--- | :--- |
 | `wa-glpi/app.py` | WhatsApp ↔ GLPI middleware bridge (active, mirrors server) |
 | `main.py` | GLPI → Sheets / AppSheet sync CLI |
-| `docker-compose.yml` | GLPI + MariaDB + WAHA containers |
+| `docker-compose.yml` | GLPI + MariaDB + WAHA + Ollama + AI triage + middleware containers |
 | `sync_from_server.sh` | Pull DB snapshot from server & restore locally |
 | `integrations/appsheet/` | *(Placeholder)* Future dedicated AppSheet module |
-| `integrations/ai/` | *(Placeholder)* Future AI/LLM triage & smart reply |
+| `ai-triage/` | Local advisory AI triage API and tests |
 | `tests/` | *(Placeholder)* Future unit & integration tests |
 | `scripts/` | *(Placeholder)* Future automation & helper scripts |
 | `docs/` | *(Placeholder)* Future extended documentation |

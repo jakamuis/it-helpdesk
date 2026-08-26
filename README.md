@@ -22,6 +22,10 @@ A production-ready Python synchronization service that integrates the **GLPI RES
   - Supports `Add`, `Edit`, and `Upsert` table actions.
   - Custom header handling (`ApplicationAccessKey`).
 
+- **WhatsApp Integration (`wa-glpi/app.py`)**:
+  - Acts as middleware between GLPI and WAHA (WhatsApp HTTP API).
+  - Handles chat monitoring and ticket followup synchronization.
+
 - **CLI & Configuration (`main.py`)**:
   - Flexible environment variable configuration via `.env`.
   - Supports CLI flags (`--mode`, `--item-type`, `--limit`, `--dry-run`).
@@ -37,6 +41,9 @@ GLPI/
 ├── glpi_client.py       # GLPI REST API client (initSession, fetch, killSession)
 ├── sheets_client.py     # Google Sheets API v4 client using Service Account
 ├── appsheet_client.py   # AppSheet Direct Inbound REST API client
+├── wa-glpi/             # WhatsApp to GLPI middleware integration
+├── waha-data/           # WAHA (WhatsApp HTTP API) session data
+├── asset-sync/          # Asset synchronization tools and scripts
 ├── requirements.txt     # Python dependencies
 ├── .env.example         # Template environment configuration
 └── README.md            # Setup and usage guide
@@ -175,3 +182,66 @@ python main.py --item-type Computer --limit 50
 - **GLPI Session Safety**: Sessions are opened (`initSession`) and explicitly destroyed (`killSession`) using Python context managers, ensuring GLPI session limits are never exceeded.
 - **HTTP Retries**: Automatic exponential backoff retries on HTTP `429` (Rate Limit) and `5xx` server errors using `urllib3.util.retry.Retry`.
 - **Validation**: Environment variables and input files are validated before launching sync operations.
+
+---
+
+## Local AI Triage (Phase 1)
+
+This project includes local, advisory AI triage for incoming WhatsApp tickets. An actionable report creates a GLPI ticket immediately; AI classification and one-question-at-a-time clarification then enrich the same ticket. Helpdesk staff remain the final decision makers.
+
+### Architecture
+
+- `wa-glpi`: Durable message deduplication, retry/recovery, early ticket creation, conversation state, and safe WhatsApp replies.
+- `ai-triage`: A FastAPI service that validates structured model output, applies deterministic safety rules, redacts sensitive data, and writes a metadata-only audit trail.
+- `ollama`: A local Ollama instance running the lightweight classifier (default `qwen3:0.6b`). No external AI APIs are used.
+
+### Setup and Configuration
+
+1. **Enable AI**: In your `.env` file, set `AI_TRIAGE_ENABLED=true` (disabled by default for safety).
+2. **Configure Ollama**: The CPU-friendly default is `qwen3:0.6b`. A larger model can be selected on an accelerated host.
+3. **Build and Run**:
+   ```bash
+   docker compose up -d --build ollama ai-triage wa-glpi
+   ```
+4. **Pull Model**:
+   ```bash
+   docker compose exec ollama ollama pull qwen3:0.6b
+   ```
+
+### Features & Security
+
+- **Deterministic Fallbacks**: Critical keywords (e.g., "ransomware", "pabrik mati") bypass the LLM and instantly flag for human escalation.
+- **Redaction**: Passwords, OTPs, and API tokens are redacted before sending to the LLM.
+- **Controlled Replies**: Model-generated prose is never sent to WhatsApp. Follow-up questions come from an allowlisted Indonesian template set.
+- **Bounded Hybrid Inference**: Explicit common issues are routed instantly by inspectable local rules. Direct answers to clarification questions reuse durable conversation context without another model call. Other ambiguous messages use Ollama for one allowlisted route code and are marked for human review.
+- **Helpdesk Workflow**: AI values are appended as advisory ticket notes; Phase 1 does not overwrite native GLPI category, priority, group, or assignee fields.
+- **Idempotency**: Processed message IDs, conversation state, acknowledgements, and retry state persist in SQLite. GLPI writes carry a WAHA message marker for recovery.
+- **Fallback Behavior**: If the AI service fails or times out, the system automatically falls back to standard helpdesk ticket creation without losing the message.
+
+### Testing AI Triage API
+
+The service stays internal to the Compose network because host port `8000` is already used by the CCTV project. Test it inside the container:
+
+```bash
+docker compose exec -T ai-triage python -c '
+import json, urllib.request
+payload = json.dumps({
+    "conversation_id": "manual-test-1",
+    "message": "printer saya rusak kertasnya macet",
+    "conversation_state": {}
+}).encode()
+request = urllib.request.Request(
+    "http://127.0.0.1:8000/api/v1/triage",
+    data=payload,
+    headers={"Content-Type": "application/json"},
+)
+print(urllib.request.urlopen(request, timeout=35).read().decode())
+'
+```
+
+See `ai-triage/README.md` for more details.
+
+### Phase 1 Limitations & Future Work
+
+- **Current Limitations**: AI cannot automatically close tickets, resolve incidents, or route native GLPI fields. WAHA polling still reads one `lastMessage` per chat, so webhook/history ingestion is the next reliability milestone for burst traffic.
+- **Future Phase 2**: Implementation of vector databases / RAG to provide knowledge-base answers to known issues.

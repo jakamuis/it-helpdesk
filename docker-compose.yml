@@ -3,10 +3,10 @@ services:
     image: mariadb:10.11
     container_name: glpi_db
     environment:
-      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_ROOT_PASSWORD: "${GLPI_DB_ROOT_PASSWORD:?Set GLPI_DB_ROOT_PASSWORD in .env}"
       MYSQL_DATABASE: glpidb
       MYSQL_USER: glpi
-      MYSQL_PASSWORD: glpi_password
+      MYSQL_PASSWORD: "${GLPI_DB_PASSWORD:?Set GLPI_DB_PASSWORD in .env}"
     volumes:
       - glpi_db_data:/var/lib/mysql
     restart: always
@@ -23,7 +23,7 @@ services:
       - GLPI_DB_PORT=3306
       - GLPI_DB_NAME=glpidb
       - GLPI_DB_USER=glpi
-      - GLPI_DB_PASSWORD=glpi_password
+      - "GLPI_DB_PASSWORD=${GLPI_DB_PASSWORD:?Set GLPI_DB_PASSWORD in .env}"
     volumes:
       - glpi_data:/var/www/html/glpi
     depends_on:
@@ -37,17 +37,97 @@ services:
     ports:
       - "3001:3000"
     environment:
-      - WAHA_API_KEY=helpdesk123
-      - WAHA_DASHBOARD_USERNAME=admin
-      - WAHA_DASHBOARD_PASSWORD=admin123
-      - WHATSAPP_SWAGGER_USERNAME=admin
-      - WHATSAPP_SWAGGER_PASSWORD=admin123
+      - "WAHA_API_KEY=${WAHA_API_KEY:?Set WAHA_API_KEY in .env}"
+      - "WAHA_DASHBOARD_USERNAME=${WAHA_DASHBOARD_USERNAME:-admin}"
+      - "WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASSWORD:?Set WAHA_DASHBOARD_PASSWORD in .env}"
+      - "WHATSAPP_SWAGGER_USERNAME=${WHATSAPP_SWAGGER_USERNAME:-admin}"
+      - "WHATSAPP_SWAGGER_PASSWORD=${WHATSAPP_SWAGGER_PASSWORD:?Set WHATSAPP_SWAGGER_PASSWORD in .env}"
       - WHATSAPP_DEFAULT_ENGINE=WEBJS
       - WAHA_PRINT_QR=True
     volumes:
       - ./waha-data:/app/.sessions
     restart: always
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ai-triage:
+    build:
+      context: ./ai-triage
+    container_name: ai_triage
+    restart: unless-stopped
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:0.6b}
+      OLLAMA_TEMPERATURE: ${OLLAMA_TEMPERATURE:-0.1}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-25}
+      OLLAMA_THINK: ${OLLAMA_THINK:-false}
+      OLLAMA_NUM_PREDICT: ${OLLAMA_NUM_PREDICT:-256}
+      OLLAMA_COMPACT_MODE: ${OLLAMA_COMPACT_MODE:-true}
+      AI_CONFIDENCE_THRESHOLD: ${AI_CONFIDENCE_THRESHOLD:-0.75}
+      AI_AUDIT_DB_PATH: /data/ai_triage_audit.db
+    volumes:
+      - ai_triage_audit_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json,urllib.request;
+          data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3));
+          raise SystemExit(0 if data.get('status') == 'ok' else 1)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  wa-glpi:
+    build:
+      context: ./wa-glpi
+    container_name: wa_glpi
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      AI_TRIAGE_ENABLED: ${AI_TRIAGE_ENABLED:-false}
+      WAHA_URL: http://waha:3000
+      GLPI_URL: http://glpi/apirest.php
+      AI_TRIAGE_URL: http://ai-triage:8000
+      AI_TRIAGE_TIMEOUT_SECONDS: ${AI_TRIAGE_TIMEOUT_SECONDS:-30}
+      CONVERSATION_STATE_DB_PATH: /data/conversation_state.db
+      CONVERSATION_STATE_TTL_SECONDS: ${CONVERSATION_STATE_TTL_SECONDS:-86400}
+      MESSAGE_RETRY_DELAY_SECONDS: ${MESSAGE_RETRY_DELAY_SECONDS:-30}
+      GLPI_TIMEOUT_SECONDS: ${GLPI_TIMEOUT_SECONDS:-15}
+      WAHA_TIMEOUT_SECONDS: ${WAHA_TIMEOUT_SECONDS:-10}
+      TICKET_MAPPING_FILE: /data/ticket_mapping.json
+      FOLLOWUP_TRACK_FILE: /data/last_followup.txt
+    volumes:
+      - wa_glpi_state_data:/data
+    depends_on:
+      waha:
+        condition: service_started
+      glpi:
+        condition: service_started
+      ai-triage:
+        condition: service_healthy
+
 volumes:
   glpi_db_data:
   glpi_data:
+  ollama_models:
+  ai_triage_audit_data:
+  wa_glpi_state_data:

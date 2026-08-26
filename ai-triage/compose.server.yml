@@ -1,0 +1,78 @@
+services:
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    restart: unless-stopped
+    init: true
+    volumes:
+      - ollama_models:/root/.ollama
+    cpus: 2.0
+    mem_limit: 2560m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  ai-triage:
+    image: "it-helpdesk-ai-triage:${AI_TRIAGE_IMAGE_TAG:?Set AI_TRIAGE_IMAGE_TAG}"
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:18000:8000"
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: qwen3:0.6b
+      OLLAMA_TEMPERATURE: "0.1"
+      OLLAMA_TIMEOUT_SECONDS: "25"
+      OLLAMA_THINK: "false"
+      OLLAMA_NUM_PREDICT: "256"
+      OLLAMA_COMPACT_MODE: "true"
+      AI_CONFIDENCE_THRESHOLD: "0.75"
+      AI_AUDIT_DB_PATH: /data/ai_triage_audit.db
+    volumes:
+      - ai_triage_audit_data:/data
+    cpus: 0.5
+    mem_limit: 512m
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json,urllib.request;
+          data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3));
+          raise SystemExit(0 if data.get('status') == 'ok' and data.get('ollama_reachable') is True and data.get('model_available') is True else 1)
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  ollama_models:
+  ai_triage_audit_data:

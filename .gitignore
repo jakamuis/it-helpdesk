@@ -14,6 +14,12 @@ __pycache__/
 # Database & Large Dumps
 *.sql
 *.sqlite3
+*.db
+/ticket_mapping.json
+/last_followup.txt
+/wa-glpi/ticket_mapping.json
+/wa-glpi/last_followup.txt
+/wa-glpi/data/
 
 # Docker & WAHA data
 waha-data/
