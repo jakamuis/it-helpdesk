@@ -3,7 +3,7 @@
 **Tanggal snapshot:** 26 Agustus 2026 (WIB)
 **Repository:** `IT-Helpdesk`
 **Fokus saat ini:** GLPI, WAHA, AI Triage, dan Asset Sync
-**Status umum:** Implementasi utama tersedia, tes otomatis hijau, dan middleware terbaru sudah aktif di Development Server. Operasional WhatsApp masih menunggu scan QR WAHA; AI Triage server belum dipasang atau diaktifkan.
+**Status umum:** Implementasi utama tersedia, tes otomatis hijau, dan middleware beserta AI Triage sudah aktif di Development Server. Operasional WhatsApp end-to-end masih menunggu scan QR WAHA.
 
 > Dokumen ini tidak memuat token, password, API key, atau isi service-account. Konfigurasi rahasia tetap harus disimpan di `.env` atau secret volume lokal.
 
@@ -38,12 +38,12 @@ flowchart LR
 | --- | --- | --- | --- |
 | GLPI lokal + MariaDB | ✅ Tersedia | ✅ Berjalan | GLPI di `localhost:8080`; database internal |
 | WAHA lokal | ✅ Tersedia | ✅ Berjalan | Dashboard/API di `localhost:3001` |
-| Middleware WAHA ↔ GLPI | ✅ Diimplementasikan | ⚠️ Aktif di server | Source terbaru aktif; alur chat menunggu WAHA terhubung |
-| AI Triage FastAPI | ✅ Phase 1 diimplementasikan | ⏸️ Belum aktif di server | Internal-only; deployment server masih diperlukan |
-| Ollama | ✅ Terkonfigurasi | ✅ Berjalan dan sehat | Default baru `qwen3:0.6b` |
+| Middleware WAHA ↔ GLPI | ✅ Diimplementasikan | ✅ Aktif di server | AI aktif; alur chat menunggu WAHA terhubung |
+| AI Triage FastAPI | ✅ Phase 1 diimplementasikan | ✅ Sehat di server | Loopback-only di `127.0.0.1:18000` |
+| Ollama | ✅ Terkonfigurasi | ✅ Sehat di lokal dan server | Model server `qwen3:0.6b`; tidak membuka host port |
 | Asset Sync Sheets → GLPI | ✅ Engine dan pengaman tersedia | ⏸️ Tidak berjalan | Scheduler/write gate sengaja dinonaktifkan |
 | Legacy GLPI → Sheets/AppSheet | ⚙️ Client tersedia | ❓ Belum divalidasi ulang | Membutuhkan credential dan integration test |
-| Deployment Development Server | ⚠️ Parsial | ⚠️ Middleware aktif | GLPI sehat; WAHA menunggu QR; AI masih nonaktif |
+| Deployment Development Server | ⚠️ Menunggu E2E | ✅ Middleware + AI aktif | GLPI dan AI sehat; WAHA masih menunggu QR |
 
 ## 3. Yang Sudah Selesai
 
@@ -136,6 +136,15 @@ Service berada di [`asset-sync/`](asset-sync/) dan dokumentasi lengkap berada di
 | Total modul yang diverifikasi | **243 passed** |
 | Docker Compose config | ✅ Valid |
 
+Verifikasi runtime Development Server:
+
+- Health AI ketat lulus: Ollama reachable dan model tersedia.
+- Rute deterministik lulus dalam `0,006` detik.
+- Inferensi model-backed lulus dalam `3,920` detik tanpa fallback.
+- Integration test melalui `wa-glpi/ai_client.py` lulus.
+- Restart container mempertahankan model dan audit SQLite.
+- GLPI session tetap berhasil; middleware, AI Triage, dan Ollama tidak mengalami restart loop.
+
 Catatan warning non-blocking:
 
 - Environment test middleware memakai Python macOS yang terhubung ke LibreSSL lama.
@@ -146,8 +155,8 @@ Catatan warning non-blocking:
 ### 4.1 Aktivasi lengkap
 
 - Container lokal `wa_glpi` dan `ai_triage` belum dibuild ulang dari source terakhir.
-- Implementasi sudah tercatat dalam commit lokal; commit tersebut belum dipush ke `origin/main` pada snapshot ini.
-- Middleware terbaru sudah aktif di Development Server, tetapi feature flag server masih memakai default aman `AI_TRIAGE_ENABLED=false`.
+- Implementasi aman sudah dipush ke `origin/main` pada commit `9ac9a91`.
+- Middleware Development Server sudah memakai `AI_TRIAGE_ENABLED=true` dan endpoint loopback `http://127.0.0.1:18000`.
 - End-to-end test WhatsApp nyata → WAHA → AI → GLPI → balasan WhatsApp belum dapat dijalankan karena sesi WAHA server masih `SCAN_QR_CODE`.
 
 ### 4.2 Konfigurasi GLPI lokal
@@ -210,8 +219,12 @@ Pekerjaan yang belum dilakukan:
 - Service `wa-glpi.service` aktif tanpa restart loop; autentikasi API GLPI berhasil.
 - State SQLite berhasil dibuat dengan mode file `600`; mapping tiket, cursor follow-up, dan `.env` lama tidak berubah.
 - Backup pra-deploy tersedia di `/home/glpiusr/wa-glpi/backups/20260826-232459-3bdccc5`.
+- Backup sebelum aktivasi AI tersedia di `/home/glpiusr/wa-glpi/backups/20260826-235345-ai-enable-9ac9a91`.
 - Sesi WAHA `default` masih `SCAN_QR_CODE`, sehingga polling chat belum operasional.
-- Ollama, model `qwen3:0.6b`, dan service AI Triage belum dipasang atau diaktifkan di server.
+- Release AI berada di `/home/glpiusr/ai-triage/releases/9ac9a91` dan ditunjuk oleh symlink `current`.
+- AI Triage dan Ollama sehat pada Compose project terpisah `it-helpdesk-ai`; model dan audit memakai volume persisten.
+- AI Triage dibatasi `0,5 CPU/512 MiB`; Ollama dibatasi `2 CPU/2,5 GiB`.
+- Sisa disk server setelah instalasi sekitar `12 GiB`.
 - Struktur `wa-glpi/` harus tetap kompatibel dengan `/home/glpiusr/wa-glpi/` di server.
 - `wa-glpi/app.py` dan fungsi kuncinya tidak boleh dipindah atau diganti nama.
 - Token lokal dan token server harus tetap dipisahkan.
@@ -221,7 +234,7 @@ Pekerjaan yang belum dilakukan:
 | Prioritas | Risiko/batasan | Mitigasi saat ini |
 | --- | --- | --- |
 | Tinggi | WAHA server belum tertaut ke WhatsApp | Scan QR untuk session `default`, lalu jalankan smoke test |
-| Tinggi | AI Triage belum aktif di Development Server | Deploy Ollama + sidecar secara terpisah setelah WAHA sehat |
+| Tinggi | Credential lama pernah tercatat di history Git | Tree terbaru sudah disanitasi; rotasi credential dan pembersihan history tetap diperlukan |
 | Tinggi | Token GLPI lokal belum valid | Regenerasi token dari GLPI lokal |
 | Tinggi | Burst WhatsApp dapat terlewat karena `lastMessage` polling | Rencanakan webhook/history cursor |
 | Tinggi | Asset write belum pernah dipilotkan | Semua gate default tertutup dan cap `0` |
@@ -234,6 +247,12 @@ Pekerjaan yang belum dilakukan:
 
 ### 6.1 AI Triage dan middleware
 
+- [x] Deploy Ollama dan AI Triage terisolasi di Development Server.
+- [x] Pull dan validasi model `qwen3:0.6b`.
+- [x] Verifikasi health, deterministic route, model route, persistence, dan host integration.
+- [x] Aktifkan middleware server melalui endpoint AI loopback-only.
+- [ ] Scan QR WAHA server dan pastikan session `default` menjadi `WORKING`.
+- [ ] Jalankan end-to-end WhatsApp nyata → AI → GLPI → WhatsApp.
 - [ ] Buat/validasi App Token dan User Token pada GLPI lokal.
 - [ ] Tambahkan `AI_TRIAGE_ENABLED=true` ke `.env` untuk sesi pengujian.
 - [ ] Pastikan `OLLAMA_MODEL=qwen3:0.6b` dan `OLLAMA_COMPACT_MODE=true`.
@@ -267,18 +286,17 @@ Pekerjaan yang belum dilakukan:
 ## 7. Urutan Prioritas Rekomendasi
 
 1. **Scan QR WAHA server untuk session `default`.**
-2. **Jalankan end-to-end WhatsApp → GLPI → WhatsApp pada middleware yang sudah aktif.**
-3. **Deploy Ollama dan AI Triage secara terpisah, lalu aktifkan feature flag server.**
-4. **Jalankan end-to-end AI Triage dan evaluasi contoh tiket yang sudah dianonimkan.**
-5. **Push commit lokal ke Git remote setelah tujuan push dikonfirmasi.**
-6. **Jalankan Asset Sync dalam dry-run dan review manifest.**
-7. **Siapkan HTTPS, uniqueness rule, backup, dan mutation cap untuk pilot Asset Sync.**
-8. **Baru lanjutkan webhook WAHA, native GLPI routing, dan RAG sebagai fase berikutnya.**
+2. **Jalankan end-to-end WhatsApp → AI → GLPI → WhatsApp pada middleware yang sudah aktif.**
+3. **Evaluasi AI dengan contoh tiket yang sudah dianonimkan.**
+4. **Rotasi credential yang pernah tersimpan di history Git.**
+5. **Jalankan Asset Sync dalam dry-run dan review manifest.**
+6. **Siapkan HTTPS, uniqueness rule, backup, dan mutation cap untuk pilot Asset Sync.**
+7. **Baru lanjutkan webhook WAHA, native GLPI routing, dan RAG sebagai fase berikutnya.**
 
 ## 8. Catatan Working Tree
 
-- Implementasi AI Triage dan middleware sudah masuk commit lokal, dan middleware dari snapshot tersebut sudah dipasang di Development Server.
-- Commit lokal belum dipush ke `origin` GitHub karena tujuan push eksternal belum dikonfirmasi secara eksplisit.
+- Implementasi AI Triage dan middleware sudah dipush ke `origin/main` pada commit `9ac9a91`.
+- Release AI commit tersebut sudah aktif di Development Server; status deployment akhir sedang dicatat pada perubahan dokumentasi ini.
 - Dua file Excel `Registration Asset` di folder `docs/` belum dilacak Git dan tetap hanya menjadi referensi perbandingan manual.
 - File Excel tersebut tidak boleh dijadikan sumber runtime Asset Sync.
 - `.env`, database SQLite, manifest privat, laporan privat, dan credential tidak ikut ke commit implementasi.
