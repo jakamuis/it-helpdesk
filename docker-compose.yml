@@ -50,7 +50,7 @@ services:
     restart: always
 
   ollama:
-    image: ollama/ollama:latest
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.33.0}
     container_name: ollama
     restart: unless-stopped
     volumes:

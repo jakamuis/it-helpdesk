@@ -11,6 +11,7 @@ Scope: source proyek IT-Helpdesk dan runtime yang digunakan di laptop/server 192
 | GLPI | 11.0.8 | 11.0.8 | 11.0.8, tanpa perubahan database |
 | WAHA | 2026.7.2 | 2026.9.2 | 2026.9.2 dengan digest image server |
 | AI Triage | Source sesuai laptop | Release `9ac9a91` | Source identik; tidak memerlukan rebuild server |
+| Ollama | 0.32.9 | 0.33.0 | 0.33.0; image sesuai arsitektur host, model persisten dipertahankan |
 
 Digest WAHA: `sha256:280bdc8f860267a2488a45d00ec88529646f7468c0bf0283c595d6efdd1b5e3b`. Tag versi `2026.9.2` tidak tersedia di registry saat pemeriksaan, sehingga Compose memakai digest yang diverifikasi.
 
@@ -35,6 +36,14 @@ Digest WAHA: `sha256:280bdc8f860267a2488a45d00ec88529646f7468c0bf0283c595d6efdd1
 - Setelah sinkronisasi, bandingkan commit repository dan hash source middleware aktif; cek GLPI/WAHA melalui versi aplikasi serta AI melalui source dan health endpoint.
 - Gunakan pembacaan API untuk smoke check tanpa mengirim pesan uji WhatsApp atau membuat tiket uji.
 - Catatan release runtime disimpan terpisah dari state bisnis dan tidak berisi credential.
+
+Hasil pemeriksaan operasional pada sinkronisasi ini:
+
+- Source repository laptop/server dan GitHub disamakan; source middleware container laptop dan service server dibandingkan dengan hash.
+- Server: middleware aktif tanpa restart loop, autentikasi API GLPI berhasil, sesi WAHA WORKING, dan AI Triage sehat.
+- Laptop: source middleware sesuai checkout, WAHA sudah 2026.9.2, dan AI Triage sehat. Token API GLPI lokal masih ditolak (`ERROR_WRONG_APP_TOKEN_PARAMETER`) serta sesi WhatsApp lokal SCAN_QR_CODE. Keduanya memerlukan konfigurasi/aktivasi lokal tersendiri; credential server tidak disalin untuk mengatasinya.
+- SQLite middleware di kedua lingkungan lolos quick_check. Environment, mount persisten, mapping tiket, serta cursor follow-up dipertahankan.
+- Konfigurasi Compose lolos validasi dengan `.env.example`. Tidak ada tiket atau pesan WhatsApp uji yang dibuat.
 
 ## Rollback
 
