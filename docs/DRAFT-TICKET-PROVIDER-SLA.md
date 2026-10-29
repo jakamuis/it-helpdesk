@@ -1,8 +1,10 @@
 # DRAFT — Eskalasi Tiket ke Provider dan Pembagian Waktu SLA
 
 Tanggal: 29 Oktober 2026 (Asia/Jakarta)  
-Status: Draft prosedur manual; belum diterapkan ke GLPI.  
+Status: Draft kebijakan dan target; alur manual sudah diterapkan melalui plugin SLA Provider 1.0.0 pada 29 Oktober 2026.  
 Terkait: [Draft Severity dan SLA](DRAFT-TICKET-SLA-SEVERITY.md).
+
+Panduan implementasi: [SLA Provider](../glpi-plugins/providersla/README.md). Pengalihan dan pemulihan tetap diinput manual; durasi dihitung oleh plugin. Integrasi Zabbix ditunda. Target durasi belum ditetapkan secara global.
 
 ## Tujuan dan cakupan
 
@@ -146,4 +148,4 @@ Sebelum implementasi, perlu ditetapkan:
 - Perilaku Pending terhadap SLA/OLA GLPI dan cara memastikan timer provider tidak ikut berhenti tanpa dasar kontrak.
 - Pemetaan field, pencatatan interval, audit perubahan, dan format laporan.
 
-Dokumen ini hanya draft proses. Tidak ada perubahan konfigurasi GLPI, pengiriman laporan kepada provider, atau implementasi integrasi Zabbix.
+Dokumen ini menjadi dasar implementasi manual SLA Provider 1.0.0. Tabel pencatatan provider dan tab tiket sudah ditambahkan di GLPI lokal/server. Plugin menjeda TTR native dengan Pending dan menghitung timer provider secara terpisah; tidak mengirim laporan kepada provider atau mengimplementasikan integrasi Zabbix. Rincian target, downtime, jam kerja aktif Helpdesk, dan KPI lain yang belum tersedia tetap mengikuti batasan pada panduan implementasi.

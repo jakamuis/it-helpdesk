@@ -26,6 +26,7 @@ services:
       - "GLPI_DB_PASSWORD=${GLPI_DB_PASSWORD:?Set GLPI_DB_PASSWORD in .env}"
     volumes:
       - glpi_data:/var/www/html/glpi
+      - ./glpi-plugins/providersla:/var/www/glpi/plugins/providersla:ro
     depends_on:
       - glpidb
     restart: always
