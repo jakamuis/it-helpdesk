@@ -151,19 +151,24 @@ final class PluginProviderslaService
         $DB->insert(self::TABLE, ['tickets_id' => $ticket->getID(), 'entities_id' => $ticket->fields['entities_id'],
             'open_ticket_id' => $ticket->getID(), 'suppliers_id' => $supplierId, 'provider_name' => $name,
             'circuit' => self::text($input, 'circuit', false, 255), 'reference' => self::text($input, 'reference', false, 255),
+            'customer_sid' => self::text($input, 'customer_sid', false, 255),
             'transferred_epoch' => $start, 'target_seconds' => $target, 'transfer_evidence' => $evidence,
             'users_id_start' => (int) Session::getLoginUserID(), 'previous_status' => $oldStatus,
             'paused_by_plugin' => (int) ($oldStatus !== Ticket::WAITING), 'created_epoch' => time()]);
         $episodeId = (int) $DB->insertId();
         self::event($episodeId, (int) $ticket->getID(), 'start', ['provider' => $name, 'transferred_epoch' => $start,
-            'target_seconds' => $target, 'evidence' => $evidence, 'previous_status' => $oldStatus]);
+            'target_seconds' => $target, 'evidence' => $evidence, 'previous_status' => $oldStatus,
+            'reference' => self::text($input, 'reference', false, 255), 'customer_sid' => self::text($input, 'customer_sid', false, 255)]);
     }
     private static function change(Ticket $ticket, array $row, string $action, array $input): void
     {
         global $DB;
         $update = [];
         if ($action === 'reference') {
-            $update['reference'] = self::text($input, 'reference', true, 255);
+            $update['reference'] = self::text($input, 'reference', false, 255);
+            if (array_key_exists('customer_sid', $input)) {
+                $update['customer_sid'] = self::text($input, 'customer_sid', false, 255);
+            }
         } elseif ($action === 'restore') {
             if ($row['restored_epoch'] !== null) {
                 throw new InvalidArgumentException('Pemulihan sudah tercatat.');

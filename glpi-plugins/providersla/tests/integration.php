@@ -25,7 +25,7 @@ try {
     $ticket->getFromDB($id); check((int) $ticket->fields['status'] === Ticket::WAITING, 'Pending pauses native TTR');
     ob_start(); PluginProviderslaSidebar::show(['item' => $ticket]); $sidebar = ob_get_clean();
     check(str_contains($sidebar, 'ISP TEST') && str_contains($sidebar, 'Catat layanan pulih')
-        && !str_contains($sidebar, 'Assign ke Provider') && !str_contains($sidebar, '<form'), 'Active sidebar offers recovery without nested forms');
+        && !str_contains($sidebar, 'Eskalasi ke Vendor') && !str_contains($sidebar, '<form'), 'Active sidebar offers recovery without nested forms');
     ob_start(); PluginProviderslaSidebar::form($id, 'restore'); $quickForm = ob_get_clean();
     check(str_contains($quickForm, 'recovery_evidence') && str_contains($quickForm, '_glpi_csrf_token'), 'Quick recovery form and CSRF');
     rejects(fn() => PluginProviderslaSidebar::form($id, 'start'));
@@ -67,15 +67,20 @@ try {
     $ticket->getFromDB($id);
     check((int) $ticket->fields['status'] !== Ticket::WAITING, 'Cancellation resumes Helpdesk');
     ob_start(); PluginProviderslaSidebar::show(['item' => $ticket]); $sidebar = ob_get_clean();
-    check(str_contains($sidebar, 'Assign ke Provider') && !str_contains($sidebar, '<form'), 'Ticket sidebar offers direct assignment');
+    check(str_contains($sidebar, 'Eskalasi ke Vendor') && !str_contains($sidebar, '<form'), 'Ticket sidebar offers direct assignment');
     ob_start(); PluginProviderslaSidebar::form($id, 'start'); $quickForm = ob_get_clean();
     check(str_contains($quickForm, 'return_to') && str_contains($quickForm, '_use_current_time')
         && !str_contains($quickForm, 'name="target_hours"'), 'Quick assignment defaults to save time without target');
     $before = time();
     PluginProviderslaService::mutate($id, 'start', ['provider_name' => 'QUICK ISP', '_use_current_time' => '1',
-        'transfer_evidence' => 'Local quick assignment fixture']);
+        'transfer_evidence' => 'Local quick assignment fixture', 'reference' => 'INC-PRINTER-001', 'customer_sid' => 'SID-000123']);
     $quick = array_values(array_filter(PluginProviderslaService::rows($id), fn($r) => empty($r['is_void']) && $r['restored_epoch'] === null))[0];
     check((int) $quick['transferred_epoch'] >= $before && $quick['target_seconds'] === null, 'Quick assignment uses actual save time, no target');
+    check($quick['reference'] === 'INC-PRINTER-001' && $quick['customer_sid'] === 'SID-000123', 'Incident and SID stored separately');
+    PluginProviderslaService::mutate($id, 'reference', ['episode_id' => $quick['id'], 'reference' => 'INC-PRINTER-002', 'customer_sid' => 'SID-000456']);
+    $updated = array_values(array_filter(PluginProviderslaService::rows($id), fn($r) => (int) $r['id'] === (int) $quick['id']))[0];
+    check($updated['customer_sid'] === 'SID-000456' && $updated['reference'] === 'INC-PRINTER-002'
+        && $updated['transferred_epoch'] === $quick['transferred_epoch'], 'Incident and SID correction preserves clock');
     PluginProviderslaService::mutate($id, 'restore', ['episode_id' => $quick['id'], '_use_current_time' => '1',
         'recovery_evidence' => 'Local quick verification fixture']);
     $ticket->getFromDB($id);

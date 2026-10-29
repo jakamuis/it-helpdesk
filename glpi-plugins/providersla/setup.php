@@ -14,7 +14,7 @@ function plugin_init_providersla()
 }
 function plugin_version_providersla()
 {
-    return ['name' => 'SLA Provider', 'version' => '1.1.0', 'author' => 'IT Helpdesk',
+    return ['name' => 'SLA Provider', 'version' => '1.2.0', 'author' => 'IT Helpdesk',
         'license' => 'GPLv3+', 'homepage' => '',
         'requirements' => ['glpi' => ['min' => '11.0.8', 'max' => '11.0.99']]];
 }

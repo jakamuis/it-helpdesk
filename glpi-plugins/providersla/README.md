@@ -1,19 +1,19 @@
-# SLA Provider 1.1.0 — GLPI 11.0.8
+# SLA Provider 1.2.0 — GLPI 11.0.8
 
 Plugin internal untuk pencatatan manual pengalihan Helpdesk ke provider. Tidak memerlukan integrasi Zabbix dan tidak mengirim laporan/pesan ke provider.
 
 ## Pemakaian
 
-1. Buka tiket dengan profil teknisi yang mempunyai hak Update tiket. Pada bagian atas panel kanan tersedia **SLA Provider → Assign ke Provider**.
+1. Buka tiket dengan profil teknisi yang mempunyai hak Update tiket. Pada bagian atas panel kanan tersedia **SLA Provider → Eskalasi ke Vendor**.
 2. Periksa gangguan dan kirim laporan ke provider melalui kanal yang biasa dipakai.
-3. Klik **Assign ke Provider**, pilih Supplier jika tersedia atau isi nama provider, lalu isi catatan pemeriksaan/bukti laporan. Form ringkas selalu **Tanpa Target**. Circuit, nomor tiket provider, dan waktu kejadian sebelumnya tersedia di **Detail tambahan / ubah waktu**.
-4. Klik **Assign & mulai hitung**. Waktu mulai otomatis memakai waktu simpan di server, kecuali waktu pengalihan diisi manual. Awal hitung bukan pembuatan tiket atau balasan ISP. Tiket menjadi Pending dan timer provider tetap berjalan 24×7. Setelah simpan, kembali ke detail tiket utama; panel kanan menampilkan provider dan durasi saat halaman dimuat.
+3. Klik **Eskalasi ke Vendor**, pilih Supplier jika tersedia atau isi nama vendor, isi **No. Incident dari Provider** dan **Nomor SID/Pelanggan** jika tersedia, lalu isi catatan pemeriksaan/bukti laporan. Form ringkas selalu **Tanpa Target**. Layanan/aset/lokasi dan waktu kejadian sebelumnya tersedia di **Detail tambahan / ubah waktu**. Nomor incident dan SID opsional, tampil langsung di form utama dan ringkasan aktif, serta ikut laporan/CSV.
+4. Klik **Eskalasi & mulai hitung**. Waktu mulai otomatis memakai waktu simpan di server, kecuali waktu pengalihan diisi manual. Awal hitung bukan pembuatan tiket atau balasan ISP. Tiket menjadi Pending dan timer provider tetap berjalan 24×7. Setelah simpan, kembali ke detail tiket utama; panel kanan menampilkan provider dan durasi saat halaman dimuat.
 5. Setelah koneksi pulih dan hasilnya diverifikasi, klik **Catat layanan pulih** di panel yang sama, isi bukti uji, lalu **Simpan pemulihan**. Waktu pulih otomatis memakai waktu simpan, kecuali diisi manual. Provider berhenti dihitung dan tiket dilanjutkan untuk Helpdesk. Penyelesaian/Solved dilakukan melalui proses GLPI biasa.
 6. Buka **Tools → SLA Provider**, atau tombol **Laporan SLA Provider** di tab tiket, untuk rekap serta ekspor CSV.
 
 Jika Supplier dipilih, plugin menambahkan Supplier sebagai assigned actor tanpa menghapus grup/teknisi Helpdesk. Jika nama diisi manual, provider tercatat di episode tanpa membuat Supplier baru. Belum ada Supplier pada pemeriksaan awal laptop/server; nama provider dapat dicatat manual.
 
-**Riwayat & detail provider** membuka tab **SLA Provider** untuk audit, koreksi referensi, pembatalan, dan form lengkap. Form lengkap mempertahankan kolom target opsional untuk penggunaan mendatang; bawaan tetap kosong. Tombol panel kanan memakai hook resmi GLPI dan dialog terpisah agar tidak mengganggu form simpan tiket. Tiket baru harus disimpan lebih dahulu; tiket Solved/Closed menampilkan ringkasan tanpa pengalihan baru.
+**Riwayat & detail provider** membuka tab **SLA Provider** untuk audit, koreksi nomor incident/SID tanpa mereset durasi, pembatalan, dan form lengkap. Form lengkap mempertahankan kolom target opsional untuk penggunaan mendatang; bawaan tetap kosong. Tombol panel kanan memakai hook resmi GLPI dan dialog terpisah agar tidak mengganggu form simpan tiket. Tiket baru harus disimpan lebih dahulu; tiket Solved/Closed menampilkan ringkasan tanpa pengalihan baru.
 
 ## Hitungan dan batasan
 
@@ -42,7 +42,7 @@ php bin/console plugin:activate providersla --no-interaction
 
 Root Compose laptop sudah memuat bind mount plugin untuk pembuatan ulang container berikutnya. Container GLPI lokal yang sedang berjalan dipasang dengan menyalin source plugin ke lokasi aktif. Server tetap memakai struktur instalasi GLPI yang sudah ada.
 
-Instalasi menambahkan hanya tabel `glpi_plugin_providersla_episodes` dan `glpi_plugin_providersla_events`; tidak memigrasikan tiket lama. Backup database dan direktori plugin sebelum pemasangan. Untuk rollback gunakan `plugin:deactivate providersla`; tabel bukti sengaja dipertahankan, termasuk saat uninstall. Jika ada episode aktif, catat pemulihan/pembatalannya sebelum deaktivasi agar tiket tidak tertinggal Pending.
+Instalasi menambahkan tabel `glpi_plugin_providersla_episodes` dan `glpi_plugin_providersla_events`; tidak memigrasikan tiket lama. Pembaruan 1.2.0 menambahkan kolom `customer_sid` kosong secara idempoten, terpisah dari `circuit` (layanan/aset/lokasi); nilai lama dipertahankan. Nomor incident menggunakan kolom `reference` yang sudah ada. Backup database dan direktori plugin sebelum pemasangan. Untuk rollback gunakan `plugin:deactivate providersla`; tabel bukti sengaja dipertahankan, termasuk saat uninstall. Jika ada episode aktif, catat pemulihan/pembatalannya sebelum deaktivasi agar tiket tidak tertinggal Pending.
 
 ## Verifikasi lokal
 

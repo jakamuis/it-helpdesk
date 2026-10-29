@@ -10,6 +10,7 @@ function plugin_providersla_install()
         `suppliers_id` int unsigned NOT NULL DEFAULT 0,
         `provider_name` varchar(255) NOT NULL,
         `circuit` varchar(255) NOT NULL DEFAULT '',
+        `customer_sid` varchar(255) NOT NULL DEFAULT '',
         `reference` varchar(255) NOT NULL DEFAULT '',
         `transferred_epoch` bigint unsigned NOT NULL,
         `restored_epoch` bigint unsigned DEFAULT NULL,
@@ -27,6 +28,9 @@ function plugin_providersla_install()
         KEY `ticket_history` (`tickets_id`, `transferred_epoch`),
         KEY `entity_start` (`entities_id`, `transferred_epoch`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    if (!$DB->fieldExists('glpi_plugin_providersla_episodes', 'customer_sid')) {
+        $DB->doQuery("ALTER TABLE `glpi_plugin_providersla_episodes` ADD `customer_sid` varchar(255) NOT NULL DEFAULT ''");
+    }
     $DB->doQuery("CREATE TABLE IF NOT EXISTS `glpi_plugin_providersla_events` (
         `id` int unsigned NOT NULL AUTO_INCREMENT,
         `episodes_id` int unsigned NOT NULL,
