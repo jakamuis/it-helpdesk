@@ -49,6 +49,13 @@ final class PluginProviderslaService
             'users_id' => (int) Session::getLoginUserID(), 'event_epoch' => time(), 'action' => $action,
             'details' => json_encode($details, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)]);
     }
+    private static function instant(array $input, string $key): int
+    {
+        $value = trim((string) ($input[$key] ?? ''));
+        // The quick form uses the actual save time unless Helpdesk supplies a past event time.
+        return $value === '' && (string) ($input['_use_current_time'] ?? '') === '1'
+            ? time() : PluginProviderslaClock::parse($value);
+    }
     public static function mutate(int $id, string $action, array $input): void
     {
         global $DB;
@@ -88,7 +95,7 @@ final class PluginProviderslaService
         if (in_array((int) $ticket->fields['status'], [Ticket::SOLVED, Ticket::CLOSED], true)) {
             throw new InvalidArgumentException('Buka kembali tiket melalui proses GLPI sebelum pengalihan baru.');
         }
-        $start = PluginProviderslaClock::parse((string) ($input['transferred_at'] ?? ''));
+        $start = self::instant($input, 'transferred_at');
         $boundary = $DB->doQuery('SELECT UNIX_TIMESTAMP(date) AS epoch FROM glpi_tickets WHERE id=' . (int) $ticket->getID())->fetch_assoc();
         if ($start > time() || $start < (int) $boundary['epoch']) {
             throw new InvalidArgumentException('Pengalihan harus setelah tiket dibuat dan tidak boleh di masa depan.');
@@ -161,7 +168,7 @@ final class PluginProviderslaService
             if ($row['restored_epoch'] !== null) {
                 throw new InvalidArgumentException('Pemulihan sudah tercatat.');
             }
-            $end = PluginProviderslaClock::parse((string) ($input['restored_at'] ?? ''));
+            $end = self::instant($input, 'restored_at');
             if ($end < (int) $row['transferred_epoch'] || $end > time()) {
                 throw new InvalidArgumentException('Pemulihan harus setelah pengalihan dan tidak boleh di masa depan.');
             }

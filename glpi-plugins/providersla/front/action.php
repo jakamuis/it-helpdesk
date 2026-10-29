@@ -14,5 +14,5 @@ try {
 } catch (InvalidArgumentException | RuntimeException $e) {
     Session::addMessageAfterRedirect(htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8'), false, ERROR);
 }
-Session::setActiveTab('Ticket', 'PluginProviderslaTicket$1');
+Session::setActiveTab('Ticket', ($_POST['return_to'] ?? '') === 'sidebar' ? 'Ticket$main' : 'PluginProviderslaTicket$1');
 Html::redirect(Ticket::getFormURLWithID($id));

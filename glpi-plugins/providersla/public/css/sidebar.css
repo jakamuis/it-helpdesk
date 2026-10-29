@@ -1,0 +1,15 @@
+.providersla-dialog {
+    width: min(540px, calc(100vw - 32px));
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    padding: 24px;
+    color: var(--tblr-body-color, #182433);
+    background: var(--tblr-bg-surface, #fff);
+    border: 1px solid var(--tblr-border-color, #dce1e7);
+    border-radius: 8px;
+    box-shadow: 0 16px 48px #0003;
+}
+.providersla-dialog::backdrop { background: #0006; }
+.providersla-dialog-close { position: absolute; top: 16px; right: 16px; }
+.providersla-dialog h2 { padding-right: 24px; }
+.providersla-sidebar h3 { font-size: 1rem; }

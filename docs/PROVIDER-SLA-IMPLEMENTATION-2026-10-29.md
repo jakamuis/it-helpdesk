@@ -1,10 +1,13 @@
 # Implementasi SLA Provider — 29 Oktober 2026
 
-Plugin internal **SLA Provider 1.0.0** dipasang pada GLPI 11.0.8 laptop dan Development Server. Source: [glpi-plugins/providersla](../glpi-plugins/providersla/README.md).
+Plugin internal **SLA Provider 1.1.0** dipasang pada GLPI 11.0.8 laptop dan Development Server. Source: [glpi-plugins/providersla](../glpi-plugins/providersla/README.md).
 
 ## Perilaku yang tersedia
 
 - Tab **SLA Provider** pada tiket untuk teknisi yang memiliki hak Update tiket dan akses ke entity/tiket terkait.
+- Versi 1.1.0 menyederhanakan operasi melalui **Assign ke Provider** pada bagian atas panel kanan detail tiket. Form ringkas berisi provider dan catatan pemeriksaan/bukti laporan; nomor tiket, circuit, dan waktu kejadian sebelumnya disembunyikan di detail tambahan. Form ringkas memakai **Tanpa Target**, sesuai pilihan pengguna.
+- Waktu pengalihan/pemulihan ringkas otomatis memakai waktu simpan di server jika tidak diisi manual. Setelah simpan kembali ke detail tiket utama. Episode aktif menampilkan nama provider, waktu mulai, durasi saat halaman dimuat, serta **Catat layanan pulih** pada panel yang sama. Riwayat lengkap tetap tersedia di tab plugin.
+- Panel memakai hook resmi `pre_itil_info_section`; dialog form diletakkan di luar form tiket GLPI. Tidak ada perubahan pada kode inti GLPI.
 - Pengalihan manual dengan nama provider atau Supplier, circuit/layanan, timestamp pengiriman laporan, bukti diagnosis/pengiriman, nomor tiket opsional, dan target jam opsional.
 - Awal hitung dari pengalihan Helpdesk, tanpa menunggu penerimaan atau nomor tiket ISP. Perubahan nomor tiket tidak menggeser waktu mulai.
 - Tiket dibuat Pending saat pengalihan untuk menjeda TTR native. Timer provider sendiri tetap berjalan 24×7, menggunakan timestamp Asia/Jakarta yang disimpan sebagai Unix seconds.
@@ -22,15 +25,18 @@ Ringkasan non-provider adalah selisih elapsed siklus tiket dengan interval provi
 - Compose laptop ditambahkan mount source plugin untuk pembuatan ulang container berikutnya; container aktif dipasang melalui penyalinan source.
 - Kedua instance sebelumnya memiliki mode eksekusi plugin `suspended_by_update`. Setelah kompatibilitas diperiksa, eksekusi di-resume agar plugin dapat diinstal dan diaktifkan. Server mengembalikan Data Injection 2.15.4 yang sebelumnya berstatus Enabled; GDrive 3.0.0 tetap Not Installed. Tidak ada proses impor/sinkronisasi aset yang dijalankan.
 - Backup database server sebelum instalasi: `/home/glpiusr/wa-glpi/backups/20261029-030339-providersla/glpi-before.sql` (timestamp nama direktori UTC; file mode 600). Status plugin sebelumnya dicatat pada `plugin-state.json` di direktori yang sama.
+- Backup sebelum pembaruan panel kanan 1.1.0: `/home/glpiusr/wa-glpi/backups/20261029-041921-providersla/`, berisi `glpi-before.sql`, `plugin-state.json`, dan `providersla-before-1.1.0.tgz`. CLI mengonfirmasi versi 1.1.0 Enabled setelah pembaruan.
 - Tidak ada perubahan environment middleware, mapping WhatsApp, cursor, ataupun state percakapan. Tidak ada tiket historis yang dialihkan secara otomatis.
 - Instalasi menambahkan dua tabel plugin. Uninstall/deaktivasi mempertahankan histori. Selesaikan/batalkan episode aktif sebelum deaktivasi agar tiket tidak tertinggal Pending.
 
 ## Validasi yang selesai
 
 - 19 pemeriksaan clock: konversi Jakarta/UTC, tanggal invalid, target pecahan/kosong/invalid, batas deadline, overdue, void, durasi melewati 24 jam, dan formula CSV.
-- Tes integrasi lokal dengan rollback seluruh fixture: Pending/resume, Supplier native, target opsional, pengalihan ganda/overlap, tanggal masa depan, referensi tidak mereset waktu, audit, pembatalan, rendering form dan pemeriksaan hak akses.
+- Tes integrasi lokal dengan rollback seluruh fixture: Pending/resume, Supplier native, target opsional, pengalihan ganda/overlap, tanggal masa depan, referensi tidak mereset waktu, audit, pembatalan, rendering form dan pemeriksaan hak akses. Tambahan 1.1.0 meliputi panel aktif/tidak aktif, CSRF form ringkas, waktu simpan otomatis, pemulihan ringkas, dan pembatasan template preview/hak teknisi.
 - HTTP terautentikasi lokal dan server: laporan 200, CSV 200, POST tanpa CSRF 403. Pengujian server memakai HTTPS dengan sertifikat diverifikasi dan resolusi vhost lokal.
 - Fixture integrasi lokal seluruhnya di-rollback; nol episode dan nol tiket fixture tersisa. Server tidak dibuatkan tiket/episode uji dan tidak dikirimkan pesan WhatsApp/provider.
-- PHP lint dan validasi Compose berhasil. Tampilan tidak diuji melalui screenshot browser karena akses Computer Use belum tersedia; HTML form dan halaman diperiksa melalui render/HTTP.
+- Uji browser headless lokal 1.1.0 pada detail tiket GLPI asli: posisi panel kanan, dialog di luar form native, pengiriman POST assign dan pemulihan, Tanpa Target, serta kembali ke tab utama berhasil. Screenshot panel dan dialog diperiksa; tidak ada galat JavaScript. Fixture UI lokal dihapus setelah uji.
+- HTTP HTTPS server 1.1.0: tab utama tiket merender panel kanan dan tombol, form ringkas memuat CSRF, aset JS/CSS 200, laporan/CSV 200, dan POST tanpa CSRF 403. Pemeriksaan tiket server hanya baca; tidak membuat episode atau mengalihkan tiket pengguna.
+- PHP lint, pemeriksaan sintaks JavaScript, dan validasi Compose sebelumnya berhasil.
 
 Panduan operasi dan batasan lengkap terdapat di README plugin.

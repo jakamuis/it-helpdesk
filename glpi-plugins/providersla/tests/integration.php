@@ -5,6 +5,7 @@ require dirname(__DIR__, 3) . '/vendor/autoload.php';
 $kernel = new Glpi\Kernel\Kernel(); $kernel->boot();
 require_once dirname(__DIR__) . '/inc/service.class.php';
 require_once dirname(__DIR__) . '/inc/ticket.class.php';
+require_once dirname(__DIR__) . '/inc/sidebar.class.php';
 function check($ok, string $message): void { if (!$ok) { throw new RuntimeException($message); } }
 function rejects(callable $fn): void { try { $fn(); } catch (InvalidArgumentException) { return; } throw new RuntimeException('Expected invalid input rejection'); }
 $user = new User(); check($user->getFromDBbyName('glpi'), 'Local fixture user');
@@ -22,6 +23,12 @@ try {
     $rows = array_values(PluginProviderslaService::rows($id));
     check(count($rows) === 1, 'One episode'); $episode = $rows[0];
     $ticket->getFromDB($id); check((int) $ticket->fields['status'] === Ticket::WAITING, 'Pending pauses native TTR');
+    ob_start(); PluginProviderslaSidebar::show(['item' => $ticket]); $sidebar = ob_get_clean();
+    check(str_contains($sidebar, 'ISP TEST') && str_contains($sidebar, 'Catat layanan pulih')
+        && !str_contains($sidebar, 'Assign ke Provider') && !str_contains($sidebar, '<form'), 'Active sidebar offers recovery without nested forms');
+    ob_start(); PluginProviderslaSidebar::form($id, 'restore'); $quickForm = ob_get_clean();
+    check(str_contains($quickForm, 'recovery_evidence') && str_contains($quickForm, '_glpi_csrf_token'), 'Quick recovery form and CSRF');
+    rejects(fn() => PluginProviderslaSidebar::form($id, 'start'));
     rejects(fn() => PluginProviderslaService::mutate($id, 'start', $input));
     rejects(fn() => PluginProviderslaService::mutate($id, 'restore', ['episode_id' => $episode['id'], 'restored_at' => '2999-01-01T00:00', 'recovery_evidence' => 'future']));
     check(count(PluginProviderslaService::rows($id)) === 1, 'Failed mutations rolled back');
@@ -59,9 +66,27 @@ try {
     PluginProviderslaService::mutate($id, 'void', ['episode_id' => $second['id'], 'reason' => 'Provider attribution correction']);
     $ticket->getFromDB($id);
     check((int) $ticket->fields['status'] !== Ticket::WAITING, 'Cancellation resumes Helpdesk');
+    ob_start(); PluginProviderslaSidebar::show(['item' => $ticket]); $sidebar = ob_get_clean();
+    check(str_contains($sidebar, 'Assign ke Provider') && !str_contains($sidebar, '<form'), 'Ticket sidebar offers direct assignment');
+    ob_start(); PluginProviderslaSidebar::form($id, 'start'); $quickForm = ob_get_clean();
+    check(str_contains($quickForm, 'return_to') && str_contains($quickForm, '_use_current_time')
+        && !str_contains($quickForm, 'name="target_hours"'), 'Quick assignment defaults to save time without target');
+    $before = time();
+    PluginProviderslaService::mutate($id, 'start', ['provider_name' => 'QUICK ISP', '_use_current_time' => '1',
+        'transfer_evidence' => 'Local quick assignment fixture']);
+    $quick = array_values(array_filter(PluginProviderslaService::rows($id), fn($r) => empty($r['is_void']) && $r['restored_epoch'] === null))[0];
+    check((int) $quick['transferred_epoch'] >= $before && $quick['target_seconds'] === null, 'Quick assignment uses actual save time, no target');
+    PluginProviderslaService::mutate($id, 'restore', ['episode_id' => $quick['id'], '_use_current_time' => '1',
+        'recovery_evidence' => 'Local quick verification fixture']);
+    $ticket->getFromDB($id);
+    check((int) $ticket->fields['status'] !== Ticket::WAITING, 'Quick recovery resumes Helpdesk');
+    ob_start(); PluginProviderslaSidebar::show(['item' => $ticket, 'options' => ['template_preview' => true]]);
+    check(ob_get_clean() === '', 'No assignment in template preview');
     $saved = $_SESSION['glpiactiveprofile']['ticket']; $_SESSION['glpiactiveprofile']['ticket'] = 0;
     try { PluginProviderslaService::ticket($id); throw new RuntimeException('ACL bypass'); }
     catch (Glpi\Exception\Http\AccessDeniedHttpException) {}
+    ob_start(); PluginProviderslaSidebar::show(['item' => $ticket]);
+    check(ob_get_clean() === '', 'Sidebar hidden without technician ticket rights');
     $_SESSION['glpiactiveprofile']['ticket'] = $saved;
-    echo "Integration: workflow, overlap/duplicate, future date, audit, rendering and ACL passed\n";
+    echo "Integration: workflow, overlap/duplicate, future date, audit, native tab/sidebar, quick assignment/recovery and ACL passed\n";
 } finally { $DB->rollBack(); }
