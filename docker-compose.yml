@@ -31,7 +31,8 @@ services:
     restart: always
 
   waha:
-    image: devlikeapro/waha:latest
+    # WAHA 2026.9.2, matched to the Development Server on 2026-10-29.
+    image: ${WAHA_IMAGE:-devlikeapro/waha@sha256:280bdc8f860267a2488a45d00ec88529646f7468c0bf0283c595d6efdd1b5e3b}
     platform: linux/amd64
     container_name: waha_local
     ports:

@@ -3,6 +3,12 @@ import time
 import urllib3
 import json
 import os
+import hashlib
+import re
+import html
+from status_notifier import StatusNotifier
+
+status_notifier = StatusNotifier()
 
 urllib3.disable_warnings()
 
@@ -68,7 +74,7 @@ def get_glpi_session():
                 "Authorization": f"user_token {USER_TOKEN}",
                 "App-Token": APP_TOKEN
             },
-            verify=False,
+            verify=True,
             timeout=(3.05, GLPI_TIMEOUT_SECONDS),
         )
         response.raise_for_status()
@@ -94,7 +100,7 @@ def kill_glpi_session(session_token):
                 "Session-Token": session_token,
                 "App-Token": APP_TOKEN,
             },
-            verify=False,
+            verify=True,
             timeout=(3.05, GLPI_TIMEOUT_SECONDS),
         )
         response.raise_for_status()
@@ -170,7 +176,7 @@ def find_ticket_by_marker(session_token, marker):
                 "criteria[0][searchtype]": "contains",
                 "criteria[0][value]": marker,
             },
-            verify=False,
+            verify=True,
             timeout=(3.05, GLPI_TIMEOUT_SECONDS),
         )
         response.raise_for_status()
@@ -192,7 +198,7 @@ def find_followup_by_marker(session_token, ticket_id, marker):
                 "App-Token": APP_TOKEN,
             },
             params={"range": "0-999"},
-            verify=False,
+            verify=True,
             timeout=(3.05, GLPI_TIMEOUT_SECONDS),
         )
         response.raise_for_status()
@@ -248,7 +254,7 @@ Pesan:
                 "impact": 3
             }
         },
-        verify=False,
+        verify=True,
         timeout=(3.05, GLPI_TIMEOUT_SECONDS),
     )
     response.raise_for_status()
@@ -281,7 +287,7 @@ def create_followup(session_token, ticket_id, message, marker=None):
                 "content": content
             }
         },
-        verify=False,
+        verify=True,
         timeout=(3.05, GLPI_TIMEOUT_SECONDS),
     )
     response.raise_for_status()
@@ -414,6 +420,69 @@ def _send_ticket_reply_once(conn, chat_id, ticket_id, scope):
     send_ticket_reply(chat_id, ticket_id)
     mark_reply_sent(conn, reply, chat_id, scope)
     conn.commit()
+
+def _is_greeting(message):
+    normalized = re.sub(r"[\W_]+", " ", message.casefold()).strip()
+    return normalized in {
+        "hi", "hai", "halo", "hallo", "hello", "helo", "hey", "hei",
+        "pagi", "siang", "sore", "malam", "selamat pagi", "selamat siang",
+        "selamat sore", "selamat malam", "assalamualaikum",
+    }
+
+
+def _send_welcome_once(conn, chat_id):
+    conn.execute("""CREATE TABLE IF NOT EXISTS welcome_replies (
+        phone_hash TEXT PRIMARY KEY, sent_at REAL NOT NULL)""")
+    phone_hash = hashlib.sha256(chat_id.encode()).hexdigest()
+    now = time.time()
+    row = conn.execute(
+        "SELECT sent_at FROM welcome_replies WHERE phone_hash=?", (phone_hash,),
+    ).fetchone()
+    if row and now - row[0] < 600:
+        return
+    send_whatsapp(chat_id, (
+        "Halo 👋 Selamat datang di IT Helpdesk.\n\n"
+        "Silakan ceritakan kendala IT yang Anda alami dan lokasinya.\n"
+        "Contoh: Internet lambat di kantor Medan.\n\n"
+        "Kami akan membantu mencatat laporan dan memberikan nomor tiket Anda."
+    ))
+    conn.execute(
+        "INSERT INTO welcome_replies VALUES (?, ?) "
+        "ON CONFLICT(phone_hash) DO UPDATE SET sent_at=excluded.sent_at",
+        (phone_hash, now),
+    )
+    conn.commit()
+    print("[WELCOME] Greeting reply sent")
+
+
+def get_ticket_status(session_token, ticket_id):
+    response = requests.get(
+        f"{GLPI_URL}/Ticket/{int(ticket_id)}",
+        headers={"Session-Token": session_token, "App-Token": APP_TOKEN},
+        verify=True,
+        timeout=(3.05, GLPI_TIMEOUT_SECONDS),
+    )
+    response.raise_for_status()
+    ticket = response.json()
+    if not isinstance(ticket, dict) or int(ticket.get("status", 0)) not in range(1, 7):
+        raise ValueError("Invalid GLPI ticket status")
+    return int(ticket["status"])
+
+
+def _send_triage_ready_once(conn, chat_id, ticket_id, conversation_id, ai_response):
+    if ai_response.get("status") != "ready_for_ticket" or ai_response.get("human_review_required"):
+        return
+    reply = (
+        f"✅ Informasi laporan untuk Tiket #{ticket_id} sudah lengkap "
+        "dan sudah diteruskan ke tim IT.\n\n"
+        "Kami akan mengabari Anda ketika status tiket menjadi Solved (Selesai)."
+    )
+    scope = f"triage-ready:{conversation_id}"
+    if not has_reply_been_sent(conn, reply, chat_id, scope):
+        send_whatsapp(chat_id, reply)
+        mark_reply_sent(conn, reply, chat_id, scope)
+        conn.commit()
+
 
 def _send_triage_question_once(
     conn,
@@ -589,6 +658,10 @@ def _process_ai_message(
         questions_asked,
     )
 
+    _send_triage_ready_once(
+        conn, sender_id, ticket_id, active_conv["conversation_id"], ai_response,
+    )
+
 def _standard_process_flow(
     session_token,
     sender_name,
@@ -673,6 +746,27 @@ def _process_chat_message(sender_name, sender_id, message_body, msg_id):
         print("SENDER  :", sender_id)
         print("MESSAGE :", message_body)
 
+        # Handle simple greetings before AI/GLPI, including during an active
+        # conversation, so a greeting cannot become an answer to a triage question.
+        if _is_greeting(message_body) and status not in _REMOTE_WRITE_STATUSES:
+            _send_welcome_once(conn, sender_id)
+            set_message_status(conn, msg_id, sender_id, "completed")
+            conn.commit()
+            return
+
+
+        active_conv = get_active_conversation(conn, sender_id)
+        if active_conv and active_conv.get("glpi_ticket_id") and status not in _REMOTE_WRITE_STATUSES:
+            session_token = get_glpi_session()
+            if not session_token:
+                raise RuntimeError("GLPI session unavailable")
+            if get_ticket_status(session_token, active_conv["glpi_ticket_id"]) in {5, 6}:
+                update_conversation(conn, active_conv["conversation_id"], {
+                    "expires_at": time.time() - 1,
+                })
+                conn.commit()
+                print("[CONVERSATION] Finished ticket detached before triage")
+
         ai_response = None
         if AI_TRIAGE_ENABLED:
             ai_response = call_triage(sender_id, message_body)
@@ -704,12 +798,14 @@ def _process_chat_message(sender_name, sender_id, message_body, msg_id):
                 and ai_response.get("intent") in {"greeting", "spam"}
                 and not ai_response.get("human_review_required")
             ):
-                print("[AI TRIAGE] Ignoring non-actionable greeting/spam.")
+                if ai_response.get("intent") == "greeting":
+                    _send_welcome_once(conn, sender_id)
+                print("[AI TRIAGE] Non-actionable greeting/spam handled without ticket.")
                 set_message_status(conn, msg_id, sender_id, "completed")
                 conn.commit()
                 return
 
-        session_token = get_glpi_session()
+        session_token = session_token or get_glpi_session()
         if not session_token:
             raise RuntimeError("GLPI session unavailable")
 
@@ -773,7 +869,24 @@ def _process_chat_message(sender_name, sender_id, message_body, msg_id):
         kill_glpi_session(session_token)
         conn.close()
 
+_last_waha_session_status = None
+
+
 def process_chats():
+    global _last_waha_session_status
+    session_response = requests.get(
+        f"{WAHA_URL}/api/sessions/default",
+        headers={"X-Api-Key": WAHA_API_KEY},
+        timeout=(3.05, WAHA_TIMEOUT_SECONDS),
+    )
+    session_response.raise_for_status()
+    session = session_response.json()
+    status = session.get("status") if isinstance(session, dict) else "INVALID_RESPONSE"
+    if status != _last_waha_session_status:
+        print(f"[WAHA SESSION] {status}; chat polling requires WORKING")
+        _last_waha_session_status = status
+    if status != "WORKING":
+        return
     response = requests.get(
         f"{WAHA_URL}/api/default/chats",
         headers={
@@ -833,6 +946,38 @@ def process_chats():
 # CHECK GLPI FOLLOWUPS
 # =========================================
 
+def get_all_followups(session_token):
+    followups = []
+    start = 0
+    while True:
+        response = requests.get(
+            f"{GLPI_URL}/ITILFollowup",
+            headers={"Session-Token": session_token, "App-Token": APP_TOKEN},
+            params={"range": f"{start}-{start + 99}", "sort": "id", "order": "ASC"},
+            verify=True,
+            timeout=(3.05, GLPI_TIMEOUT_SECONDS),
+        )
+        response.raise_for_status()
+        page = response.json()
+        if not isinstance(page, list):
+            raise ValueError("Invalid GLPI follow-up page")
+        followups.extend(page)
+        content_range = response.headers.get("Content-Range", "")
+        match = re.fullmatch(r"(?:\w+\s+)?(\d+)-(\d+)/(\d+)", content_range) if isinstance(content_range, str) else None
+        if match:
+            first, last, total = map(int, match.groups())
+            if first != start or last < first or last - first + 1 != len(page):
+                raise ValueError("Inconsistent GLPI follow-up pagination")
+            if last + 1 >= total:
+                break
+            start = last + 1
+        else:
+            if len(page) < 100:
+                break
+            start += len(page)
+    return followups
+
+
 def check_followups():
     last_followup_id = 0
     if os.path.exists(FOLLOWUP_TRACK_FILE):
@@ -847,19 +992,7 @@ def check_followups():
         return
 
     try:
-        response = requests.get(
-            f"{GLPI_URL}/ITILFollowup",
-            headers={
-                "Session-Token": session_token,
-                "App-Token": APP_TOKEN,
-            },
-            verify=False,
-            timeout=(3.05, GLPI_TIMEOUT_SECONDS),
-        )
-        response.raise_for_status()
-        followups = response.json()
-        if not isinstance(followups, list):
-            return
+        followups = get_all_followups(session_token)
 
         mapping = {}
         if os.path.exists(MAPPING_FILE):
@@ -877,6 +1010,7 @@ def check_followups():
                 return 0
 
         latest_handled_id = last_followup_id
+        conn = _get_conn()
         for followup in sorted(followups, key=followup_id):
             current_id = followup_id(followup)
             if current_id <= last_followup_id:
@@ -884,6 +1018,10 @@ def check_followups():
 
             ticket_id = str(followup.get("items_id"))
             content = str(followup.get("content", ""))
+
+            if followup.get("itemtype", "Ticket") != "Ticket":
+                latest_handled_id = current_id
+                continue
 
             # Inbound WhatsApp messages are stored as marked GLPI follow-ups.
             # They must never be echoed back to the same WhatsApp user.
@@ -902,10 +1040,16 @@ def check_followups():
 
             chat_id = mapping.get(ticket_id)
             if chat_id:
-                clean_content = content.replace("<p>", "").replace("</p>", "")
+                clean_content = html.unescape(content)
+                clean_content = re.sub(r"(?i)<br\s*/?>|</(?:p|div)>", "\n", clean_content)
+                clean_content = html.unescape(re.sub(r"<[^>]+>", "", clean_content)).strip()
                 message = f"📌 Update Ticket #{ticket_id}\n{clean_content}"
-                send_whatsapp(chat_id, message)
-                print(f"FOLLOWUP {current_id} SENT TO WHATSAPP")
+                scope = f"glpi-followup:{current_id}"
+                if not has_reply_been_sent(conn, message, chat_id, scope):
+                    send_whatsapp(chat_id, message)
+                    mark_reply_sent(conn, message, chat_id, scope)
+                    conn.commit()
+                    print(f"FOLLOWUP {current_id} SENT TO WHATSAPP")
 
             latest_handled_id = current_id
 
@@ -918,7 +1062,10 @@ def check_followups():
                 f.write(str(latest_handled_id))
             os.replace(temporary_path, FOLLOWUP_TRACK_FILE)
     finally:
+        if "conn" in locals():
+            conn.close()
         kill_glpi_session(session_token)
+
 
 # =========================================
 # MAIN LOOP
@@ -932,6 +1079,11 @@ if __name__ == "__main__":
     while True:
 
         try:
+
+            status_notifier.poll(
+                MAPPING_FILE, _get_conn, get_glpi_session, kill_glpi_session,
+                GLPI_URL, APP_TOKEN, GLPI_TIMEOUT_SECONDS, send_whatsapp,
+            )
 
             process_chats()
 

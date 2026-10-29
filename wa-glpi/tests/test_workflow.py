@@ -33,6 +33,152 @@ from state_manager import (
 )
 spec.loader.exec_module(middleware_app)
 
+
+@pytest.mark.parametrize("finished_status", [5, 6])
+def test_finished_ticket_starts_fresh_before_ai_reads_context(
+    mock_glpi, mock_waha, mock_triage, monkeypatch, finished_status,
+):
+    create, followup = mock_glpi
+    sender = f"finished-{finished_status}@lid"
+    middleware_app._process_chat_message("User", sender, "printer rusak", f"old-{finished_status}")
+    create.return_value = {"id": 101}
+    monkeypatch.setattr(middleware_app, "get_ticket_status", lambda *a: finished_status)
+    def fresh_triage(phone, message):
+        conn = _get_conn()
+        try:
+            assert get_active_conversation(conn, phone) is None
+        finally:
+            conn.close()
+        return {
+            "intent": "incident", "category": "network", "priority": "low",
+            "status": "collecting_information", "human_review_required": False,
+            "next_question_key": "site", "extracted_fields": {},
+        }
+    monkeypatch.setattr(middleware_app, "call_triage", fresh_triage)
+    middleware_app._process_chat_message("User", sender, "internet lambat", f"new-{finished_status}")
+    assert create.call_count == 2
+    followup.assert_not_called()
+    conn = _get_conn()
+    try:
+        assert get_active_conversation(conn, sender)["glpi_ticket_id"] == "101"
+    finally:
+        conn.close()
+
+
+def test_ready_confirmation_retries_failed_send_and_is_not_repeated(mock_waha):
+    conn = _get_conn()
+    response = {"status": "ready_for_ticket", "human_review_required": False}
+    mock_waha.side_effect = RuntimeError("temporary send failure")
+    with pytest.raises(RuntimeError):
+        middleware_app._send_triage_ready_once(conn, "ready@lid", "100", "ready-conv", response)
+    mock_waha.side_effect = None
+    middleware_app._send_triage_ready_once(conn, "ready@lid", "100", "ready-conv", response)
+    middleware_app._send_triage_ready_once(conn, "ready@lid", "100", "ready-conv", response)
+    assert mock_waha.call_count == 2
+    assert "#100" in mock_waha.call_args.args[1]
+    assert "sudah lengkap" in mock_waha.call_args.args[1]
+    conn.close()
+
+
+def test_followups_pagination_honors_actual_page_size(monkeypatch):
+    first, second = MagicMock(), MagicMock()
+    first.json.return_value = [{"id": 1}, {"id": 2}]
+    first.headers = {"Content-Range": "0-1/3"}
+    second.json.return_value = [{"id": 105}]
+    second.headers = {"Content-Range": "2-2/3"}
+    get = MagicMock(side_effect=[first, second])
+    monkeypatch.setattr(middleware_app.requests, "get", get)
+    assert [x["id"] for x in middleware_app.get_all_followups("session")] == [1, 2, 105]
+    assert get.call_args_list[1].kwargs["params"]["range"] == "2-101"
+    assert get.call_args.kwargs["verify"] is True
+
+
+def test_followups_partial_send_failure_does_not_duplicate_success(
+    mock_glpi, mock_waha, monkeypatch, tmp_path,
+):
+    (tmp_path / "ticket_mapping.json").write_text('{"18":"requester@lid"}')
+    rows = [
+        {"id": 103, "items_id": 18, "itemtype": "Ticket", "content": "<p>First &amp; reply</p>", "is_private": 0},
+        {"id": 104, "items_id": 18, "itemtype": "Problem", "content": "Never send", "is_private": 0},
+        {"id": 105, "items_id": 18, "itemtype": "Ticket", "content": "Second reply", "is_private": 0},
+    ]
+    monkeypatch.setattr(middleware_app, "get_all_followups", lambda *_: rows)
+    mock_waha.side_effect = [None, RuntimeError("offline"), None]
+    with pytest.raises(RuntimeError):
+        middleware_app.check_followups()
+    middleware_app.check_followups()
+    middleware_app.check_followups()
+    assert mock_waha.call_count == 3
+    assert mock_waha.call_args_list[0].args[1] == "📌 Update Ticket #18\nFirst & reply"
+    assert (tmp_path / "last_followup.txt").read_text() == "105"
+
+
+def test_followups_pagination_failure_keeps_cursor_and_sends_nothing(
+    mock_glpi, mock_waha, monkeypatch, tmp_path,
+):
+    (tmp_path / "last_followup.txt").write_text("15")
+    first = MagicMock()
+    first.json.return_value = [{"id": 103, "items_id": 18, "content": "reply"}]
+    first.headers = {"Content-Range": "0-0/2"}
+    monkeypatch.setattr(middleware_app.requests, "get", MagicMock(side_effect=[first, RuntimeError("page failed")]))
+    with pytest.raises(RuntimeError):
+        middleware_app.check_followups()
+    mock_waha.assert_not_called()
+    assert (tmp_path / "last_followup.txt").read_text() == "15"
+
+
+def test_welcome_is_fast_persistent_and_does_not_create_ticket(
+    mock_glpi, mock_waha, monkeypatch,
+):
+    ai = MagicMock(side_effect=AssertionError("Greeting must not call AI"))
+    glpi = MagicMock(side_effect=AssertionError("Greeting must not call GLPI"))
+    monkeypatch.setattr(middleware_app, "call_triage", ai)
+    monkeypatch.setattr(middleware_app, "get_glpi_session", glpi)
+    middleware_app._process_chat_message("User", "welcome@lid", "HI 👋", "welcome-1")
+    middleware_app._process_chat_message("User", "welcome@lid", "halo", "welcome-2")
+    middleware_app._process_chat_message("User", "welcome@lid", "HI 👋", "welcome-1")
+    assert mock_waha.call_count == 1
+    assert "Selamat datang" in mock_waha.call_args.args[1]
+    mock_glpi[0].assert_not_called()
+    conn = _get_conn()
+    try:
+        conn.execute("UPDATE welcome_replies SET sent_at=sent_at-601")
+        conn.commit()
+    finally:
+        conn.close()
+    middleware_app._process_chat_message("User", "welcome@lid", "hello", "welcome-3")
+    assert mock_waha.call_count == 2
+
+
+def test_welcome_send_failure_retries_without_losing_message(
+    mock_glpi, mock_waha, monkeypatch,
+):
+    monkeypatch.setattr("state_manager.MESSAGE_RETRY_DELAY_SECONDS", 0)
+    mock_waha.side_effect = [RuntimeError("offline"), None]
+    middleware_app._process_chat_message("User", "welcome-retry@lid", "hi", "welcome-retry")
+    conn = _get_conn()
+    assert middleware_app.get_message_status(conn, "welcome-retry") == "failed_retryable"
+    middleware_app._process_chat_message("User", "welcome-retry@lid", "hi", "welcome-retry")
+    assert middleware_app.get_message_status(conn, "welcome-retry") == "completed"
+    assert mock_waha.call_count == 2
+    conn.close()
+
+
+def test_greeting_during_active_ticket_preserves_triage_context(
+    mock_glpi, mock_waha, mock_triage,
+):
+    sender = "welcome-active@lid"
+    middleware_app._process_chat_message("User", sender, "printer rusak", "before-hi")
+    conn = _get_conn()
+    before = get_active_conversation(conn, sender)
+    middleware_app._process_chat_message("User", sender, "Hi", "active-hi")
+    after = get_active_conversation(conn, sender)
+    assert before == after
+    assert mock_glpi[0].call_count == 1
+    mock_glpi[1].assert_not_called()
+    assert not middleware_app._is_greeting("halo printer rusak")
+    conn.close()
+
 @pytest.fixture(autouse=True)
 def mock_env(monkeypatch, tmp_path):
     monkeypatch.setenv("AI_TRIAGE_ENABLED", "true")
@@ -56,6 +202,7 @@ def mock_env(monkeypatch, tmp_path):
 
 @pytest.fixture
 def mock_glpi(monkeypatch):
+    monkeypatch.setattr(middleware_app, "get_ticket_status", lambda *args: 2)
     monkeypatch.setattr(middleware_app, "get_glpi_session", lambda: "mock_token")
     monkeypatch.setattr(middleware_app, "kill_glpi_session", MagicMock())
     mock_create = MagicMock(return_value={"id": 100})
@@ -102,7 +249,11 @@ def mock_triage(monkeypatch):
 
 def process_mock_chats(chats):
     with patch("requests.get") as mock_get:
-        mock_get.return_value.json.return_value = chats
+        session_response = MagicMock()
+        session_response.json.return_value = {"status": "WORKING"}
+        chats_response = MagicMock()
+        chats_response.json.return_value = chats
+        mock_get.side_effect = [session_response, chats_response]
         middleware_app.process_chats()
 
 def test_printer_progressive_enrichment(mock_glpi, mock_waha, mock_triage):
@@ -483,3 +634,13 @@ def test_reply_deduplication_is_scoped_per_conversation():
         "conversation-b",
     )
     conn.close()
+
+
+@pytest.mark.parametrize("session_status", ["SCAN_QR_CODE", "STOPPED", "FAILED"])
+def test_chat_polling_waits_for_working_waha_session(session_status):
+    response = MagicMock()
+    response.json.return_value = {"status": session_status}
+    with patch("requests.get", return_value=response) as get:
+        middleware_app.process_chats()
+    assert get.call_count == 1
+    assert get.call_args.args[0].endswith("/api/sessions/default")
