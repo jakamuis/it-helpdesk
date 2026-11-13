@@ -27,6 +27,7 @@ services:
     volumes:
       - glpi_data:/var/www/html/glpi
       - ./glpi-plugins/providersla:/var/www/glpi/plugins/providersla:ro
+      - ./glpi-plugins/itrequest:/var/www/glpi/plugins/itrequest:ro
     depends_on:
       - glpidb
     restart: always
