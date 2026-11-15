@@ -4,6 +4,7 @@ import json
 import time
 
 import requests
+from ticket_merge import recipients
 
 
 class StatusNotifier:
@@ -37,7 +38,7 @@ class StatusNotifier:
             )""")
             conn.commit()
             for ticket_id, chat_id in mapping.items():
-                if not str(ticket_id).isdigit() or not isinstance(chat_id, str) or not chat_id:
+                if not str(ticket_id).isdigit() or not recipients(chat_id):
                     continue
                 try:
                     response = requests.get(
@@ -49,6 +50,8 @@ class StatusNotifier:
                     ticket = response.json()
                     if not isinstance(ticket, dict):
                         raise ValueError("Invalid ticket response")
+                    if str(ticket.get("is_deleted", 0)) == "1":
+                        continue  # Deleted/merged source must never imply resolution.
                     status = int(ticket["status"])
                     if status not in range(1, 7):
                         raise ValueError("Invalid ticket status")
@@ -93,7 +96,23 @@ class StatusNotifier:
             "Tim IT telah menyelesaikan penanganan laporan Anda.\n\n"
             "Jika kendala masih terjadi, silakan balas pesan ini. Terima kasih."
         )
-        send(chat_id, message)
+        conn.execute("""CREATE TABLE IF NOT EXISTS ticket_status_deliveries (
+            ticket_id TEXT, revision INTEGER, chat_id TEXT,
+            PRIMARY KEY(ticket_id, revision, chat_id))""")
+        failures = []
+        for recipient in recipients(chat_id):
+            if conn.execute("SELECT 1 FROM ticket_status_deliveries WHERE ticket_id=? "
+                            "AND revision=? AND chat_id=?", (ticket_id, pending, recipient)).fetchone():
+                continue
+            try:
+                send(recipient, message)
+                conn.execute("INSERT INTO ticket_status_deliveries VALUES (?,?,?)",
+                             (ticket_id, pending, recipient))
+                conn.commit()
+            except Exception as exc:
+                failures.append(exc)
+        if failures:
+            raise failures[0]
         conn.execute(
             "UPDATE ticket_status_notifications SET pending_revision=NULL "
             "WHERE ticket_id=? AND pending_revision=?", (ticket_id, pending),

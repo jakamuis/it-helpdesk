@@ -1,0 +1,41 @@
+{
+  "name": "GLPI Tickets - High and Disaster",
+  "eventsource": 0,
+  "status": 1,
+  "esc_period": "1h",
+  "pause_suppressed": 1,
+  "filter": {
+    "evaltype": 0,
+    "conditions": [
+      {
+        "conditiontype": 4,
+        "operator": 5,
+        "value": "4"
+      }
+    ]
+  },
+  "operations": [
+    {
+      "operationtype": 0,
+      "esc_step_from": 1,
+      "esc_step_to": 1,
+      "opmessage": {
+        "default_msg": 1,
+        "mediatypeid": "34"
+      },
+      "opmessage_usr": [
+        {
+          "userid": "7"
+        }
+      ]
+    }
+  ],
+  "recovery_operations": [
+    {
+      "operationtype": 11,
+      "opmessage": {
+        "default_msg": 1
+      }
+    }
+  ]
+}

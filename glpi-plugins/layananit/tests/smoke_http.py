@@ -23,7 +23,7 @@ try:
     result = subprocess.run(['docker','exec','-u','www-data',container,'php','-r',create], check=True, capture_output=True, text=True)
     fixture_id = int(result.stdout.strip())
     assert fixture_id > 0
-    for page in ['dashboard', 'incident', 'request', 'Computer', 'Monitor', 'Printer', 'users', 'more']:
+    for page in ['dashboard', 'incident', 'request', 'Computer', 'Monitor', 'Printer', 'users', 'report', 'more']:
         url = base + '/plugins/layananit/front/index.php?page=' + page
         with urllib.request.urlopen(urllib.request.Request(url, headers={'Cookie': name + '=' + sid})) as response:
             html = response.read().decode()
@@ -33,6 +33,22 @@ try:
             assert 'Reset dashboard to default' not in html, 'Incident list must not insert the mini dashboard'
             assert 'name="page" value="incident"' in html or "name='page' value='incident'" in html, 'Search must retain Incident navigation'
         print('PASS authenticated Layanan TI', page)
+    def report(query):
+        req = urllib.request.Request(base + '/plugins/layananit/front/index.php?page=report&' + query, headers={'Cookie': name + '=' + sid})
+        return urllib.request.urlopen(req)
+    import csv, io
+    with report('from=2026-01-01&until=2026-12-31&csv=1') as response:
+        assert 'text/csv' in response.headers['Content-Type']
+        records = list(csv.reader(io.StringIO(response.read().decode('utf-8-sig'))))
+        assert any(row[0] == str(fixture_id) for row in records[1:])
+        assert len(records[0]) == 10
+    with report('from=2026-01-01&until=2026-12-31&technician=2147483647&csv=1') as response:
+        assert len(list(csv.reader(io.StringIO(response.read().decode('utf-8-sig'))))) == 1
+    with report('from=2026-02-30&until=2026-12-31') as response:
+        assert 'Tanggal tidak valid.' in response.read().decode()
+    with report('from=2026-12-31&until=2026-01-01') as response:
+        assert 'Tanggal awal harus' in response.read().decode()
+    print('PASS reporting CSV, technician filter, invalid dates and reversed range')
     with urllib.request.urlopen(base + '/plugins/layananit/front/index.php') as response:
         assert 'lti-sidebar' not in response.read().decode()
     try:

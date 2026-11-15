@@ -30,3 +30,13 @@ waha-data/
 !.vscode/settings.json
 .idea/
 asset-sync/data/service_account.json
+
+# Codex temporary builds
+.codex-build/
+
+# Generated reports, exports and presentations
+outputs/
+*.pptx
+
+# Internal asset spreadsheets
+docs/*.xlsx

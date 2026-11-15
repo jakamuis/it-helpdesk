@@ -588,6 +588,30 @@ def test_marked_inbound_followup_is_not_echoed_to_whatsapp(
     assert cursor_path.read_text() == "42"
 
 
+@pytest.mark.parametrize("content, expected", [
+    ("<p>reset: Q&lt;contoh&gt;&amp;123</p>", "reset: Q<contoh>&123"),
+    ("reset: Q&lt;contoh&gt;", "reset: Q<contoh>"),
+    ("<p>reset: Q&lt;b&gt;123&lt;/b&gt;</p>", "reset: Q<b>123</b>"),
+    ("&lt;p&gt;reset: Q&amp;lt;contoh&amp;gt;&lt;/p&gt;", "reset: Q<contoh>"),
+    ("<p>Baris <strong>satu</strong></p><p>Dua<br>tiga &amp; empat</p>",
+     "Baris satu\nDua\ntiga & empat"),
+    ("<p>Literal &amp;lt;contoh&amp;gt;</p>", "Literal &lt;contoh&gt;"),
+])
+def test_followup_preserves_literal_characters_in_whatsapp(
+    mock_glpi, mock_waha, monkeypatch, tmp_path, content, expected,
+):
+    chat_id = f"{tmp_path.name}@lid"
+    (tmp_path / "ticket_mapping.json").write_text(json.dumps({"272": chat_id}))
+    monkeypatch.setattr(middleware_app, "get_all_followups", lambda *_: [{
+        "id": 44, "items_id": 272, "content": content, "is_private": 0,
+    }])
+
+    middleware_app.check_followups()
+
+    mock_waha.assert_called_once_with(chat_id, f"📌 Update Ticket #272\n{expected}")
+    assert (tmp_path / "last_followup.txt").read_text() == "44"
+
+
 def test_private_glpi_followup_is_not_sent_to_whatsapp(
     mock_glpi,
     mock_waha,

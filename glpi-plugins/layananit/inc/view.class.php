@@ -10,19 +10,29 @@ class PluginLayananitView
     public static function header(string $page): void
     {
         $h = [self::class, 'h'];
-        $links = ['dashboard' => ['Dashboard Layanan TI','ti-layout-dashboard'], 'incident' => ['Incident','ti-ticket'],
+        $links = ['dashboard' => ['Dashboard Tiket','ti-home'], 'incident' => ['Incident','ti-ticket'],
             'request' => ['Request IT','ti-clipboard-check'], 'Computer' => ['Computer','ti-device-desktop'],
-            'Monitor' => ['Monitor','ti-device-desktop'], 'Printer' => ['Printer','ti-printer'], 'users' => ['Manajemen User','ti-users'], 'more' => ['Fitur Lainnya','ti-apps']];
-        echo '<link rel="stylesheet" href="' . $h(Plugin::getWebDir('layananit') . '/public/app.css') . '"><div class="lti"><aside class="lti-sidebar"><a class="lti-brand" href="' . $h(self::url()) . '"><em>GLPI</em><span>Layanan TI</span></a><nav aria-label="Navigasi Layanan TI">';
+            'Monitor' => ['Monitor','ti-device-desktop'], 'Printer' => ['Printer','ti-printer'], 'users' => ['Manajemen User','ti-users'], 'report' => ['Reporting','ti-chart-bar'], 'more' => ['Fitur Lainnya','ti-apps']];
+        echo '<link rel="stylesheet" href="' . $h(Plugin::getWebDir('layananit') . '/public/app.css?v=20261115d') . '"><div class="lti"><aside class="lti-sidebar"><a class="lti-brand" href="' . $h(self::url()) . '"><img class="lti-logo" src="' . $h(Plugin::getWebDir('layananit') . '/public/samator-logo.png') . '" alt="Samator" width="190" height="34"><span>IT Helpdesk</span></a><nav aria-label="Navigasi Layanan TI">';
         foreach ($links as $key => [$label,$icon]) {
             if ($key === 'users' && !Session::haveRight('user', READ)) { continue; }
-            if (in_array($key, ['Computer','Monitor','Printer'], true) && !Session::haveRight(strtolower($key), READ)) { continue; }
-            if ($key === 'incident' && !Ticket::canView()) { continue; }
+            if ($key === 'Computer') {
+                $assets = array_filter(['Computer','Monitor','Printer'], static fn($type) => Session::haveRight(strtolower($type), READ));
+                if ($assets) {
+                    echo '<details class="lti-assets"' . (in_array($page, ['Computer','Monitor','Printer'], true) ? ' open' : '') . '><summary><i aria-hidden="true" class="ti ti-box"></i>Asset</summary><div class="lti-asset-links">';
+                    foreach ($assets as $type) {
+                        echo '<a' . ($type === $page ? ' aria-current="page" class="active"' : '') . ' href="' . $h(self::url($type)) . '"><i aria-hidden="true" class="ti ' . $links[$type][1] . '"></i>' . $h($type) . '</a>';
+                    }
+                    echo '</div></details>';
+                }
+            }
+            if (in_array($key, ['Computer','Monitor','Printer'], true)) { continue; }
+            if (in_array($key, ['incident','report'], true) && !Ticket::canView()) { continue; }
             echo '<a' . ($key === $page ? ' aria-current="page" class="active"' : '') . ' href="' . $h(self::url($key)) . '"><i aria-hidden="true" class="ti ' . $icon . '"></i>' . $h($label) . '</a>';
         }
         echo '</nav>';
         if (self::admin()) { echo '<div class="lti-developer"><strong>Developer</strong><p>Halaman asli GLPI</p><a href="' . $h(self::native('/front/central.php')) . '">〈/〉 Buka GLPI</a></div>'; }
-        echo '</aside><main class="lti-main"><div class="lti-top"><span>Layanan TI / ' . $h($links[$page][0] ?? 'Dashboard') . '</span><span>' . $h($_SESSION['glpifriendlyname'] ?? $_SESSION['glpiname'] ?? '') . ' · Entity #' . (int) ($_SESSION['glpiactive_entity'] ?? 0) . '</span></div><div class="lti-content">';
+        echo '</aside><main class="lti-main"><div class="lti-top"><span>Layanan TI / ' . $h($links[$page][0] ?? 'Dashboard') . '</span><span>' . $h($_SESSION['glpifriendlyname'] ?? $_SESSION['glpiname'] ?? '') . ' · ' . $h(Dropdown::getDropdownName('glpi_entities', (int) ($_SESSION['glpiactive_entity'] ?? 0))) . '</span></div><div class="lti-content">';
     }
     public static function footer(): void { echo '<footer class="lti-footer">Layanan TI · Data mengikuti hak akses dan entity GLPI.</footer></div></main></div>'; }
     public static function requestRows(string $q): array
@@ -91,18 +101,39 @@ class PluginLayananitView
         echo '<section class="lti-card lti-incident"><div class="lti-section"><h2>Antrean Incident</h2><a href="' . self::h(self::url('incident')) . '">Lihat semua →</a></div><div class="lti-scroll"><table><thead><tr><th>Nomor / judul</th><th>Status</th><th>Prioritas</th></tr></thead><tbody>';
         foreach (array_slice($data['data']['rows'] ?? [], 0, 8) as $row) {
             $raw = $row['raw'];
-            echo '<tr><td><a href="' . self::h(self::native('/front/ticket.form.php?id=' . (int) $row['id'])) . '">#' . (int) $row['id'] . '</a><br>' . self::h($raw['ITEM_Ticket_1'] ?? '') . '</td><td><span class="lti-badge">' . self::h(Ticket::getStatus((int) ($raw['ITEM_Ticket_12'] ?? 1))) . '</span></td><td>' . self::h(Ticket::getPriorityName((int) ($raw['ITEM_Ticket_3'] ?? 3))) . '</td></tr>';
+            echo '<tr><td><a href="' . self::h(self::native('/front/ticket.form.php?id=' . (int) $row['id'])) . '">#' . (int) $row['id'] . '</a><br>' . self::h($raw['ITEM_Ticket_1'] ?? '') . '</td><td><span class="lti-badge lti-status-' . (int) ($raw['ITEM_Ticket_12'] ?? 1) . '">' . self::h(Ticket::getStatus((int) ($raw['ITEM_Ticket_12'] ?? 1))) . '</span></td><td>' . self::h(Ticket::getPriorityName((int) ($raw['ITEM_Ticket_3'] ?? 3))) . '</td></tr>';
         }
         if (empty($data['data']['rows'])) { echo '<tr><td colspan="3">Tidak ada Incident yang dapat diakses.</td></tr>'; }
         echo '</tbody></table></div><p class="lti-muted">Delapan Incident terbaru dalam cakupan akses Anda.</p></section>';
     }
     public static function dashboard(): void
     {
-        echo '<div class="lti-title"><div><h1>Dashboard Layanan TI</h1><p>Pantau antrean dan penanganan layanan TI.</p></div><div class="lti-actions"><a class="lti-button" href="' . self::h(self::native('/front/ticket.form.php')) . '">＋ Buat Incident</a><a class="lti-button secondary" href="' . self::h(self::native('/plugins/itrequest/front/index.php?tab=new')) . '">Buat Request</a></div></div>';
+        echo '<div class="lti-title"><div><h1>Dashboard Tiket</h1><p>Pantau antrean dan penanganan layanan TI.</p></div><div class="lti-actions"><a class="lti-button" href="' . self::h(self::native('/front/ticket.form.php')) . '">＋ Buat Incident</a><a class="lti-button secondary" href="' . self::h(self::native('/plugins/itrequest/front/index.php?tab=new')) . '">Buat Request</a></div></div>';
         echo '<div class="lti-summary">';
-        foreach (['Baru','Diproses','Menunggu','Selesai'] as $label) { echo '<div class="lti-card"><span>' . $label . '</span><strong>—</strong><small>Perhitungan tahap berikutnya</small></div>'; }
-        echo '</div><div class="lti-grid"><section class="lti-card"><h2>Antrean pekerjaan</h2><p>Pilih jenis pekerjaan untuk membuka antrean yang sesuai.</p><div class="lti-tabs"><a href="' . self::h(self::url('incident')) . '">Incident</a><a href="' . self::h(self::url('request')) . '">Request IT</a></div><p class="lti-muted">Incident memakai Ticket GLPI. Request IT mempertahankan approval dan nomor referensinya sendiri.</p></section><section class="lti-card"><h2>Tindak lanjut</h2><a href="' . self::h(self::native('/plugins/itrequest/front/index.php?tab=approval')) . '">Persetujuan Saya →</a><p>Indikator SLA, target, dan beban teknisi menunggu definisi perhitungan.</p></section></div>';
+        foreach (['Tiket Aktif' => [1,2,3,4], 'Baru' => [1], 'Diproses' => [2,3], 'Menunggu' => [4], 'Selesai' => [5,6]] as $label => $statuses) {
+            $count = null;
+            if (Ticket::canView()) {
+                $criteria = [['field' => 14, 'searchtype' => 'equals', 'value' => Ticket::INCIDENT_TYPE]];
+                $states = [];
+                foreach ($statuses as $status) { $states[] = ['link' => 'OR', 'field' => 12, 'searchtype' => 'equals', 'value' => $status]; }
+                $criteria[] = ['link' => 'AND', 'criteria' => $states];
+                $data = Search::getDatas('Ticket', ['criteria' => $criteria, 'start' => 0, 'list_limit' => 1, 'is_deleted' => 0], [2]);
+                $count = (int) ($data['data']['totalcount'] ?? 0);
+            }
+            echo '<div class="lti-card lti-stat"><i aria-hidden="true" class="ti ' . (['Tiket Aktif'=>'ti-ticket','Baru'=>'ti-file','Diproses'=>'ti-refresh','Menunggu'=>'ti-clock','Selesai'=>'ti-circle-check'][$label]) . '"></i><div><span>' . $label . '</span><strong>' . ($count === null ? '—' : self::h($count)) . '</strong></div></div>';
+        }
+        echo '</div><div class="lti-dashboard-grid"><div class="lti-primary">';
         self::incidentQueue();
         self::requests('');
+        echo '</div><aside class="lti-secondary">';
+        echo '<section class="lti-card lti-incident"><h2>Inventaris ' . self::h(Dropdown::getDropdownName('glpi_entities', (int) ($_SESSION['glpiactive_entity'] ?? 0))) . '</h2><div class="lti-actions">';
+        foreach (['Computer','Monitor','Printer'] as $type) {
+            if (!$type::canView()) { continue; }
+            $data = Search::getDatas($type, ['start' => 0, 'list_limit' => 1, 'is_deleted' => 0, 'criteria' => []], [2]);
+            echo '<a class="lti-button secondary" href="' . self::h(self::url($type)) . '">' . self::h($type) . ' · ' . (int) ($data['data']['totalcount'] ?? 0) . '</a>';
+        }
+        echo '</div><p class="lti-muted">Aset yang dapat Anda akses, tanpa data di Trash.</p></section>';
+        echo '<section class="lti-card"><h2>Tindak lanjut</h2><p class="lti-muted">Kelola pengajuan layanan yang membutuhkan persetujuan Anda.</p><a class="lti-button secondary" href="' . self::h(self::native('/plugins/itrequest/front/index.php?tab=approval')) . '">Persetujuan Saya <i class="ti ti-arrow-right" aria-hidden="true"></i></a></section>';
+        echo '</aside></div>';
     }
 }

@@ -6,12 +6,19 @@ if (!Plugin::isPluginActive('layananit') || ($_SESSION['glpiactiveprofile']['int
     throw new Glpi\Exception\Http\AccessDeniedHttpException();
 }
 $page = (string) ($_GET['page'] ?? 'dashboard');
-if (!in_array($page, ['dashboard','incident','request','Computer','Monitor','Printer','users','more'], true)) { $page = 'dashboard'; }
+if (!in_array($page, ['dashboard','incident','request','Computer','Monitor','Printer','users','report','more'], true)) { $page = 'dashboard'; }
 $q = mb_substr(trim((string) ($_GET['q'] ?? '')), 0, 100);
 $v = PluginLayananitView::class;
+$report = null;
+if ($page === 'report') {
+    require_once dirname(__DIR__) . '/inc/report.class.php';
+    $report = new PluginLayananitReport($_GET);
+    if (isset($_GET['csv']) && !$report->error) { return $report->csv(); }
+}
 Html::header('Layanan TI', '', 'tools', 'pluginlayananitmenu');
 $v::header($page);
-if ($page === 'dashboard') { $v::dashboard(); }
+if ($page === 'report') { $report->render(); }
+elseif ($page === 'dashboard') { $v::dashboard(); }
 elseif ($page === 'request') { echo '<h1>Request IT</h1>'; $v::requests($q); }
 elseif ($page === 'incident') { echo '<h1>Incident</h1>'; $v::nativeList('Ticket'); }
 elseif (in_array($page, ['Computer','Monitor','Printer'], true)) { echo '<h1>Asset · ' . $v::h($page) . '</h1>'; $v::nativeList($page); }

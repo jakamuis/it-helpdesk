@@ -134,3 +134,12 @@ Nonaktifkan bridge Request dengan mengosongkan `ITREQUEST_FEED_URL` pada middlew
 Screenshot memakai database fixture kosong; bukan data produksi. Kolom KPI sengaja belum berisi hasil perhitungan.
 
 [Desktop](screenshots/layanan-ti-desktop.png) · [Mobile](screenshots/layanan-ti-mobile.png)
+
+## Pembaruan lokal 15 November 2026
+
+- Branding sidebar menggunakan logo resmi Samator dan IT Helpdesk; Computer, Monitor, Printer berada dalam submenu Asset.
+- Dashboard menghitung Incident dan inventaris dari database melalui hak akses GLPI.
+- Reporting Tiket menyediakan filter tanggal pembukaan, lokasi, teknisi, status ringkas, tren bulanan, waktu penyelesaian kalender, pagination, dan CSV. Request IT plugin tidak termasuk laporan Ticket native.
+- Konfigurasi `dev/local/glpi-apache.conf` mengarahkan root ke Layanan TI dan `/front` ke GLPI native. Query login tetap diteruskan. Konfigurasi ini khusus container lokal; jangan mengganti virtual host server secara langsung.
+- Pada server, pull branch `feature/layanan-ti-cloud` di checkout setelah memeriksa perubahan lokal. Pull source tidak otomatis memperbarui plugin di `/var/www/glpi/plugins` atau middleware runtime. Ikuti backup dan instalasi plugin di atas bila melakukan deployment runtime.
+- Verifikasi: 48 tes middleware lulus; smoke HTTP lokal mencakup sembilan halaman, CSV, filter teknisi, dan validasi tanggal.

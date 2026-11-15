@@ -8,6 +8,7 @@ import re
 import html
 from status_notifier import StatusNotifier
 from request_notifier import RequestNotifier
+from ticket_merge import recipients, read_mapping, write_mapping, poll_merges
 
 status_notifier = StatusNotifier()
 request_notifier = RequestNotifier()
@@ -115,30 +116,12 @@ def kill_glpi_session(session_token):
 
 def save_mapping(ticket_id, chat_id):
 
-    data = {}
-
-    if os.path.exists(MAPPING_FILE):
-
-        try:
-
-            with open(MAPPING_FILE, "r") as f:
-                data = json.load(f)
-
-        except:
-            data = {}
-
-    data[str(ticket_id)] = chat_id
-
-    mapping_dir = os.path.dirname(MAPPING_FILE)
-    if mapping_dir:
-        os.makedirs(mapping_dir, exist_ok=True)
-    temporary_path = f"{MAPPING_FILE}.tmp"
-    with open(temporary_path, "w") as f:
-        json.dump(data, f, indent=4)
-    os.replace(temporary_path, MAPPING_FILE)
-
-    print(f"\nMAPPING SAVED:")
-    print(f"TICKET {ticket_id} -> {chat_id}")
+    data = read_mapping(MAPPING_FILE)
+    chats = recipients(data.get(str(ticket_id)))
+    if chat_id not in chats:
+        chats.append(chat_id)
+    data[str(ticket_id)] = chats[0] if len(chats) == 1 else chats
+    write_mapping(MAPPING_FILE, data)
 
 # =========================================
 # FIND EXISTING TICKET
@@ -155,7 +138,7 @@ def find_existing_ticket(chat_id):
 
     for ticket_id, saved_chat_id in reversed(list(data.items())):
 
-        if saved_chat_id == chat_id:
+        if chat_id in recipients(saved_chat_id):
 
             return ticket_id
 
@@ -468,6 +451,8 @@ def get_ticket_status(session_token, ticket_id):
     ticket = response.json()
     if not isinstance(ticket, dict) or int(ticket.get("status", 0)) not in range(1, 7):
         raise ValueError("Invalid GLPI ticket status")
+    if str(ticket.get("is_deleted", 0)) == "1":
+        raise RuntimeError("Deleted ticket awaiting merge reconciliation")
     return int(ticket["status"])
 
 
@@ -980,6 +965,22 @@ def get_all_followups(session_token):
     return followups
 
 
+def followup_to_whatsapp_text(content):
+    """Remove GLPI markup before decoding literal characters in the message."""
+    # GLPI may entity-encode the entire rich-text document. Only unwrap a
+    # recognizable document container, never arbitrary user text such as <abc>.
+    if re.fullmatch(
+        r"\s*&lt;(p|div)(?:\s[^\n]*?)?&gt;.*&lt;/\1&gt;\s*",
+        content,
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        content = html.unescape(content)
+    content = re.sub(r"(?i)<br\s*/?>|</(?:p|div)>", "\n", content)
+    content = re.sub(r"<[^>]+>", "", content)
+    # Decode once, after stripping tags: &lt;...&gt; is message content.
+    return html.unescape(content).strip()
+
+
 def check_followups():
     last_followup_id = 0
     if os.path.exists(FOLLOWUP_TRACK_FILE):
@@ -1040,11 +1041,8 @@ def check_followups():
                 latest_handled_id = current_id
                 continue
 
-            chat_id = mapping.get(ticket_id)
-            if chat_id:
-                clean_content = html.unescape(content)
-                clean_content = re.sub(r"(?i)<br\s*/?>|</(?:p|div)>", "\n", clean_content)
-                clean_content = html.unescape(re.sub(r"<[^>]+>", "", clean_content)).strip()
+            for chat_id in recipients(mapping.get(ticket_id)):
+                clean_content = followup_to_whatsapp_text(content)
                 message = f"📌 Update Ticket #{ticket_id}\n{clean_content}"
                 scope = f"glpi-followup:{current_id}"
                 if not has_reply_been_sent(conn, message, chat_id, scope):
@@ -1081,6 +1079,12 @@ if __name__ == "__main__":
     while True:
 
         try:
+
+            poll_merges(
+                MAPPING_FILE, _get_conn, get_glpi_session, kill_glpi_session,
+                GLPI_URL, APP_TOKEN, GLPI_TIMEOUT_SECONDS, send_whatsapp,
+                has_reply_been_sent, mark_reply_sent,
+            )
 
             status_notifier.poll(
                 MAPPING_FILE, _get_conn, get_glpi_session, kill_glpi_session,
