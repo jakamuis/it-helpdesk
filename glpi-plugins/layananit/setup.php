@@ -14,7 +14,7 @@ function plugin_init_layananit()
             // Head styles apply before the first paint, before the async shell is mounted.
             $PLUGIN_HOOKS['add_css']['layananit'] = ['public/app.css', 'public/native-shell.css'];
             if (str_ends_with($path, '/front/ticket.form.php')) {
-                $PLUGIN_HOOKS['add_css']['layananit'][] = 'public/ticket-fields.css';
+                $PLUGIN_HOOKS['add_css']['layananit'][] = 'public/ticket-fields.css?v=20261116c';
             }
         }
     }
