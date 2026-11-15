@@ -12,3 +12,9 @@ body:has(.lti)>.page>aside.navbar,body:has(.lti)>.page>.page-wrapper>header{disp
 .lti-brand{flex-direction:column;align-items:flex-start;gap:9px;padding:20px 24px;min-height:106px}.lti-logo{display:block;width:190px;max-width:100%;height:auto;object-fit:contain}.lti-brand span{padding:0;border:0;font-size:15px;font-weight:500;letter-spacing:.3px;color:#e4edf7}@media(max-width:1200px){.lti-brand{padding:18px 20px;gap:8px}.lti-brand span{padding:0;font-size:14px}}@media(max-width:680px){.lti-brand{flex-direction:row;align-items:center;gap:18px;padding:14px 16px;min-height:62px}.lti-logo{width:150px}.lti-brand span{border-left:1px solid #ffffff30;padding-left:18px}}
 
 .lti-report-filters{display:flex;flex-wrap:wrap;align-items:end;gap:12px}.lti-report-filters label{display:grid;gap:6px;font-size:12px;font-weight:600;flex:1;min-width:145px}.lti-report-filters input,.lti-report-filters select{font:inherit;font-size:13px;font-weight:400;border:1px solid #cfd7e2;border-radius:5px;min-height:37px;padding:7px 9px;width:100%;background:#fff;color:#162235}.lti-report-summary{margin-top:16px}.lti-report-summary strong{display:block;font-size:27px;line-height:1.3;margin-top:6px}.lti-report-overview{margin-bottom:16px}.lti-report-bar{display:flex;align-items:center;gap:14px;margin:12px 0}.lti-report-bar>span{width:65px;font-size:12px}.lti-report-bar meter{flex:1;height:20px;accent-color:#008582}.lti-report-bar strong{min-width:32px;text-align:right}.lti-report-average{display:block;font-size:30px;margin:12px 0}.lti-report-pagination{margin:16px 0 0;font-size:12px}
+
+/* Simplified ticket classification: native type remains the stored Incident/Request value. */
+.lti-ticket-form [data-testid="form-field-itilcategories_id"],
+.lti-ticket-form [data-testid="form-field-requesttypes_id"],
+.lti-ticket-form [data-testid="form-field-urgency"],
+.lti-ticket-form [data-testid="form-field-impact"]{display:none!important}

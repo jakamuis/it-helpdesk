@@ -33,8 +33,21 @@
             shell.append(template.content);
             const body = document.createElement('div'); body.className = 'lti-main';
             const content = document.createElement('div'); content.className = 'lti-content lti-native-detail';
+            if (/\/front\/ticket\.form\.php$/.test(path)) {
+                content.classList.add('lti-ticket-form');
+            }
             while (main.firstChild) content.append(main.firstChild);
             body.append(content); shell.append(body); main.append(shell);
+            if (content.classList.contains('lti-ticket-form')) {
+                const simplify = () => {
+                    const field = content.querySelector('[data-testid="form-field-type"]');
+                    const label = field?.querySelector('label');
+                    if (label && label.textContent.trim() !== 'Category') label.textContent = 'Category';
+                };
+                simplify();
+                // GLPI refreshes fields when tabs or ticket templates change.
+                new MutationObserver(simplify).observe(content, {childList:true, subtree:true});
+            }
         } catch (error) {
             fallback();
             console.warn('Layanan TI: native navigation remains available.', error);
