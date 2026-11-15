@@ -1,0 +1,10 @@
+/* Loaded in the document head only for workspace-owned native pages. */
+body>.page>aside.navbar{display:none!important}
+body>.page>.page-wrapper{margin-left:0!important}
+body>.page>.page-wrapper>header{display:none!important}
+body{background:#f3f5f8}
+main#page{visibility:hidden}
+main#page:has(.lti){visibility:visible}
+/* A failed JS load must never leave the native form inaccessible. */
+main#page{animation:lti-native-fallback 0s 8s forwards}
+@keyframes lti-native-fallback{to{visibility:visible}}

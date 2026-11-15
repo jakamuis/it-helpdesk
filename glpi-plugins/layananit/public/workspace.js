@@ -2,6 +2,9 @@
 (() => {
     const script = document.currentScript;
     const base = script ? new URL('../', script.src) : null;
+    const fallback = () => {
+        document.querySelectorAll('link[href*="layananit/public/native-shell.css"]').forEach(link => link.remove());
+    };
     const mount = async () => {
         if (!base || document.querySelector('.lti')) return;
         const path = window.location.pathname;
@@ -10,7 +13,7 @@
         const plugin = /\/plugins\/(itrequest|providersla)\/front\/(index|report)\.php$/.test(path);
         if ((!native && !plugin) || new URLSearchParams(location.search).has('display_type')) return;
         const main = document.querySelector('main#page');
-        if (!main) return;
+        if (!main) { fallback(); return; }
         let page = 'incident';
         for (const type of ['Computer', 'Monitor', 'Printer']) {
             if (path.includes('/front/' + type.toLowerCase())) page = type;
@@ -20,12 +23,11 @@
         if (path.includes('/plugins/providersla/')) page = 'more';
         try {
             const url = new URL('front/shell.php', base); url.searchParams.set('page', page);
-            const response = await fetch(url, {credentials: 'same-origin', headers: {'Accept': 'application/json'}});
-            if (!response.ok) return;
+            const response = await fetch(url, {credentials: 'same-origin', headers: {'Accept': 'application/json'}, signal: AbortSignal.timeout(6000)});
+            if (!response.ok) { fallback(); return; }
             const data = await response.json();
-            if (!data.sidebar || document.querySelector('.lti')) return;
-            const css = document.createElement('link'); css.rel = 'stylesheet';
-            css.href = new URL('public/app.css?v=20261115e', base).href; document.head.append(css);
+            if (!data.sidebar) { fallback(); return; }
+            if (document.querySelector('.lti')) return;
             const shell = document.createElement('div'); shell.className = 'lti';
             const template = document.createElement('template'); template.innerHTML = data.sidebar;
             shell.append(template.content);
@@ -34,6 +36,7 @@
             while (main.firstChild) content.append(main.firstChild);
             body.append(content); shell.append(body); main.append(shell);
         } catch (error) {
+            fallback();
             console.warn('Layanan TI: native navigation remains available.', error);
         }
     };

@@ -36,7 +36,10 @@ try:
     def native_page(path):
         return urllib.request.urlopen(urllib.request.Request(base + path, headers={'Cookie': name + '=' + sid}))
     with native_page('/front/ticket.form.php?id=' + str(fixture_id)) as response:
-        assert 'public/workspace.js' in response.read().decode()
+        html = response.read().decode()
+        assert 'public/workspace.js' in html
+        assert 'public/native-shell.css' in html and 'public/app.css' in html
+        assert html.index('public/native-shell.css') < html.index('<body')
     with native_page('/plugins/layananit/front/shell.php?page=incident') as response:
         shell = json.loads(response.read())
         assert 'lti-sidebar' in shell['sidebar'] and 'samator-logo.png' in shell['sidebar']

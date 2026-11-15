@@ -8,6 +8,12 @@ function plugin_init_layananit()
     if (str_contains($path, '/plugins/layananit/front/index.php')) { $_SESSION['layananit_workspace'] = true; }
     if (!empty($_SESSION['layananit_workspace']) && ($_SESSION['glpiactiveprofile']['interface'] ?? '') === 'central') {
         $PLUGIN_HOOKS['add_javascript']['layananit'] = ['public/workspace.js'];
+        $native = preg_match('~/front/(ticket(?:\.form)?|computer(?:\.form)?|monitor(?:\.form)?|printer(?:\.form)?|user(?:\.form)?)\.php$~', $path);
+        $plugin = preg_match('~/plugins/(itrequest|providersla)/front/(index|report)\.php$~', $path);
+        if (($native || $plugin) && !isset($_GET['display_type'])) {
+            // Head styles apply before the first paint, before the async shell is mounted.
+            $PLUGIN_HOOKS['add_css']['layananit'] = ['public/app.css', 'public/native-shell.css'];
+        }
     }
 
     $PLUGIN_HOOKS['menu_toadd']['layananit'] = ['tools' => 'PluginLayananitMenu'];
