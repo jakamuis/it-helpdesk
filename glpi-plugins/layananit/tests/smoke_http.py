@@ -33,6 +33,18 @@ try:
             assert 'Reset dashboard to default' not in html, 'Incident list must not insert the mini dashboard'
             assert 'name="page" value="incident"' in html or "name='page' value='incident'" in html, 'Search must retain Incident navigation'
         print('PASS authenticated Layanan TI', page)
+    def native_page(path):
+        return urllib.request.urlopen(urllib.request.Request(base + path, headers={'Cookie': name + '=' + sid}))
+    with native_page('/front/ticket.form.php?id=' + str(fixture_id)) as response:
+        assert 'public/workspace.js' in response.read().decode()
+    with native_page('/plugins/layananit/front/shell.php?page=incident') as response:
+        shell = json.loads(response.read())
+        assert 'lti-sidebar' in shell['sidebar'] and 'samator-logo.png' in shell['sidebar']
+    with native_page('/front/central.php') as response:
+        assert 'public/workspace.js' not in response.read().decode()
+    with native_page('/plugins/layananit/front/index.php') as response:
+        assert 'lti-sidebar' in response.read().decode()
+    print('PASS native ticket workspace, authenticated shell and original GLPI exit')
     def report(query):
         req = urllib.request.Request(base + '/plugins/layananit/front/index.php?page=report&' + query, headers={'Cookie': name + '=' + sid})
         return urllib.request.urlopen(req)
