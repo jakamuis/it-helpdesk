@@ -1,6 +1,6 @@
 # Draft integrasi alert Zabbix ke tiket GLPI
 
-Tanggal: 29 Oktober 2026  
+Tanggal: 29 Oktober 2026
 Status: draft untuk ditinjau; belum diterapkan atau diuji pada server.
 
 ## Tujuan dan lingkungan
