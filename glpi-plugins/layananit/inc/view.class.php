@@ -61,13 +61,26 @@ class PluginLayananitView
     {
         $rights = ['Ticket'=>'ticket','Computer'=>'computer','Monitor'=>'monitor','Printer'=>'printer','User'=>'user'];
         if (!isset($rights[$type]) || !$type::canView()) { throw new Glpi\Exception\Http\AccessDeniedHttpException(); }
-        echo '<section class="lti-card lti-native"><p class="lti-muted">Daftar dan aksi berikut memakai pencarian serta permission asli GLPI. Daftar Ticket mencakup data native; Request layanan menggunakan menu Request IT.</p>';
+        echo '<section class="lti-card lti-native">';
         // Native Search applies GLPI rights, entity visibility, pagination and action checks.
         if ($type === 'Ticket' && !isset($_GET['criteria'])) {
             $_GET['criteria'] = [['field' => 14, 'searchtype' => 'equals', 'value' => Ticket::INCIDENT_TYPE]];
             $_GET['reset'] = 'reset';
         }
-        Search::show($type);
+        if ($type === 'Ticket') {
+            // Search::show() inserts GLPI's mini_ticket dashboard before the list.
+            // Render the native query builder and results directly on this Incident page.
+            $params = Search::manageParams($type, $_GET);
+            $params['target'] = self::url('incident');
+            $params['display_type'] = Search::HTML_OUTPUT;
+            $params['execute_search'] = true;
+            echo '<div class="search_page row" data-testid="search-page"><div class="col search-container" data-glpi-search-container>';
+            Search::showGenericSearch($type, $params);
+            Search::showList($type, $params);
+            echo '</div></div>';
+        } else {
+            Search::show($type);
+        }
         echo '</section>';
     }
     public static function incidentQueue(): void
