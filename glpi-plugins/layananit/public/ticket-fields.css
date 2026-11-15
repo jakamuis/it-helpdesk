@@ -1,0 +1,5 @@
+/* Ticket sidebar inputs are identified by native form names, not optional test attributes. */
+#itil-data #item-main .form-field:has([name="itilcategories_id"]),
+#itil-data #item-main .form-field:has([name="requesttypes_id"]),
+#itil-data #item-main .form-field:has([name="urgency"]),
+#itil-data #item-main .form-field:has([name="impact"]){display:none!important}

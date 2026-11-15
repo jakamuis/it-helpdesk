@@ -38,15 +38,16 @@
             }
             while (main.firstChild) content.append(main.firstChild);
             body.append(content); shell.append(body); main.append(shell);
-            if (content.classList.contains('lti-ticket-form')) {
+            if (/\/front\/ticket\.form\.php$/.test(path)) {
                 const simplify = () => {
-                    const field = content.querySelector('[data-testid="form-field-type"]');
-                    const label = field?.querySelector('label');
-                    if (label && label.textContent.trim() !== 'Category') label.textContent = 'Category';
+                    document.querySelectorAll('#itil-data #item-main select[name="type"]').forEach(input => {
+                        const label = input.closest('.form-field')?.querySelector('label');
+                        if (label && label.textContent.trim() !== 'Category') label.textContent = 'Category';
+                    });
                 };
                 simplify();
-                // GLPI refreshes fields when tabs or ticket templates change.
-                new MutationObserver(simplify).observe(content, {childList:true, subtree:true});
+                // The native side panel may live outside main#page and reload via AJAX.
+                new MutationObserver(simplify).observe(document.body, {childList:true, subtree:true});
             }
         } catch (error) {
             fallback();
