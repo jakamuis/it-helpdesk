@@ -15,6 +15,14 @@ class PluginItrequestService
     {
         return count(self::rows('staff', ['entities_id' => $entity, 'users_id' => self::uid()])) > 0;
     }
+    public static function manager(int $entity): bool
+    {
+        return self::admin() || count(self::rows('managers', ['entities_id' => $entity, 'users_id' => self::uid()])) > 0;
+    }
+    public static function worker(array $r): bool
+    {
+        return self::manager((int) $r['entities_id']) || (self::staff((int) $r['entities_id']) && (int) $r['assigned_id'] === self::uid());
+    }
     public static function member(int $uid, int $entity): bool
     {
         global $DB;
@@ -37,7 +45,7 @@ class PluginItrequestService
         if (!$r || (int) $r['entities_id'] !== self::entity()) { throw new RuntimeException('Request tidak ditemukan dalam entity aktif.'); }
         $owner = (int) $r['users_id'] === self::uid();
         $approver = ((int) $r['approvers_id'] === self::uid() || ((int) ($r['directors_id'] ?? 0) === self::uid() && !empty($r['manager_approved_at']))) && $r['status'] !== 'draft';
-        $staff = !empty($r['approved_at']) && self::staff((int) $r['entities_id']) && !in_array($r['status'], ['draft','approval','director_approval','revision'], true);
+        $staff = !empty($r['approved_at']) && self::worker($r) && !in_array($r['status'], ['draft','approval','director_approval','revision'], true);
         if (!$owner && !$approver && !$staff && !self::admin()) { throw new RuntimeException('Anda tidak memiliki akses ke request ini.'); }
         return $r;
     }
@@ -76,12 +84,19 @@ class PluginItrequestService
                 $owner = (int) $r['users_id'] === self::uid();
                 $approver = self::currentApprover($r) === self::uid();
                 $payload = json_decode($r['payload'], true, 512, JSON_THROW_ON_ERROR);
-                $staff = self::staff((int) $r['entities_id']);
+                $staff = self::worker($r);
                 $changes = ['version' => (int) $r['version'] + 1, 'updated_at' => date('Y-m-d H:i:s')];
                 $note = trim((string) ($input['note'] ?? ''));
                 if (mb_strlen($note) > 4000) { throw new InvalidArgumentException('Catatan maksimal 4000 karakter.'); }
                 $details = ['note' => $note, 'from' => $r['status']];
-                if ($action === 'reassign') {
+                if ($action === 'assign') {
+                    if (!self::manager((int) $r['entities_id']) || empty($r['approved_at']) || !in_array($r['status'], ['queued','processing','information'], true)) { throw new InvalidArgumentException('Hanya IT Manager dapat menugaskan pengajuan yang telah disetujui.'); }
+                    $pic = (int) ($input['assigned_id'] ?? 0);
+                    if (!self::member($pic, (int) $r['entities_id']) || !self::rows('staff', ['entities_id' => $r['entities_id'], 'users_id' => $pic])) { throw new InvalidArgumentException('PIC harus anggota IT aktif pada entity ini.'); }
+                    if ((int) $r['assigned_id'] && $note === '') { throw new InvalidArgumentException('Alasan pergantian PIC wajib diisi.'); }
+                    $changes['assigned_id'] = $pic;
+                    $details += ['previous_assigned_id' => (int) $r['assigned_id'], 'assigned_id' => $pic];
+                } elseif ($action === 'reassign') {
                     if (!self::admin() || !in_array($r['status'], ['approval','director_approval'], true) || $note === '') { throw new InvalidArgumentException('Pengalihan hanya oleh admin pada status menunggu approval, dengan alasan.'); }
                     $aid = (int) ($input['approvers_id'] ?? 0);
                     if ($aid === (int) $r['users_id'] || $aid === (int) ($r[$r['status'] === 'director_approval' ? 'approvers_id' : 'directors_id'] ?? 0) || !self::member($aid, (int) $r['entities_id'])) { throw new InvalidArgumentException('Approver pengganti tidak valid.'); }
@@ -128,7 +143,7 @@ class PluginItrequestService
                     if ($action === 'start') {
                         $target = (string) ($input['target_date'] ?? '');
                         if (!PluginItrequestWorkflow::date($target) || $target < date('Y-m-d')) { throw new InvalidArgumentException('Isi target selesai yang valid.'); }
-                        $changes['assigned_id'] = self::uid();
+                        if (!(int) $r['assigned_id']) { throw new InvalidArgumentException('IT Manager harus menunjuk PIC sebelum pekerjaan dimulai.'); }
                         $changes['target_date'] = $target;
                         $details['target_date'] = $target;
                     }
@@ -158,11 +173,22 @@ class PluginItrequestService
         if (!self::member($uid, $entity)) { throw new InvalidArgumentException('User tidak aktif atau bukan anggota entity ini.'); }
         if ($action === 'mapping' && ($uid === $aid || !self::member($aid, $entity))) { throw new InvalidArgumentException('Atasan harus akun aktif lain dalam entity ini.'); }
         if ($action === 'mapping' && $director && ($director === $uid || $director === $aid || !self::member($director, $entity))) { throw new InvalidArgumentException('Direktur harus akun aktif lain dari pemohon dan atasan dalam entity ini.'); }
-        $table = $action === 'mapping' ? 'mappings' : 'staff';
+        if ($action === 'contact') {
+            $chat = trim((string) ($input['chat_id'] ?? ''));
+            if (!preg_match('/^[1-9][0-9]{7,14}@c\.us$/D', $chat)) { throw new InvalidArgumentException('Gunakan nomor WA terverifikasi dengan format 628xxxxxxxxxx@c.us.'); }
+            $where = ['entities_id' => $entity, 'users_id' => $uid];
+            $last = self::rows('events', [], ['ORDER' => 'id DESC', 'LIMIT' => 1]);
+            $contact = ['chat_id' => $chat, 'after_event_id' => (int) ($last[0]['id'] ?? 0)];
+            if (self::rows('contacts', $where)) { self::update('contacts', $contact, $where); }
+            else { self::insert('contacts', $where + $contact); }
+            self::event(0, 'contact', $where); // Do not copy personal phone numbers into the audit trail.
+            return;
+        }
+        $table = $action === 'mapping'  ? 'mappings' : (in_array($action, ['manager','remove_manager'], true) ? 'managers' : 'staff');
         $where = ['entities_id' => $entity, 'users_id' => $uid];
-        if ($action === 'remove_staff') {
+        if (in_array($action, ['remove_staff','remove_manager'], true)) {
             global $DB;
-            if (!$DB->delete(self::PREFIX . 'staff', $where)) { throw new RuntimeException('Gagal menghapus akses IT.'); }
+            if (!$DB->delete(self::PREFIX . $table, $where)) { throw new RuntimeException('Gagal menghapus akses IT.'); }
         } elseif ($table === 'mappings') {
             if (self::rows($table, $where)) { self::update($table, ['approvers_id' => $aid, 'directors_id' => $director], $where); }
             else { self::insert($table, $where + ['approvers_id' => $aid, 'directors_id' => $director]); }

@@ -17,6 +17,8 @@ function plugin_itrequest_install()
             KEY `history` (`requests_id`,`id`)',
         'mappings' => '`entities_id` int unsigned NOT NULL, `users_id` int unsigned NOT NULL,
             `approvers_id` int unsigned NOT NULL, UNIQUE KEY `mapping` (`entities_id`,`users_id`)',
+        'managers' => '`entities_id` int unsigned NOT NULL, `users_id` int unsigned NOT NULL, UNIQUE KEY `manager` (`entities_id`,`users_id`)',
+        'contacts' => '`entities_id` int unsigned NOT NULL, `users_id` int unsigned NOT NULL, `chat_id` varchar(40) NOT NULL, `after_event_id` int unsigned NOT NULL DEFAULT 0, UNIQUE KEY `contact` (`entities_id`,`users_id`)',
         'staff' => '`entities_id` int unsigned NOT NULL, `users_id` int unsigned NOT NULL,
             UNIQUE KEY `staff` (`entities_id`,`users_id`)',
     ];
@@ -24,6 +26,9 @@ function plugin_itrequest_install()
         $DB->doQuery("CREATE TABLE IF NOT EXISTS `glpi_plugin_itrequest_$name` (
             `id` int unsigned NOT NULL AUTO_INCREMENT, $columns, PRIMARY KEY (`id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    }
+    if (!$DB->fieldExists('glpi_plugin_itrequest_contacts', 'after_event_id')) {
+        $DB->doQuery('ALTER TABLE glpi_plugin_itrequest_contacts ADD after_event_id int unsigned NOT NULL DEFAULT 0');
     }
     if (!$DB->fieldExists('glpi_plugin_itrequest_requests', 'approved_at')) {
         $DB->doQuery('ALTER TABLE glpi_plugin_itrequest_requests ADD approved_at datetime DEFAULT NULL');

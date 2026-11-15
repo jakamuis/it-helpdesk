@@ -25,6 +25,7 @@ try {
     [$manager,$director,$it] = $others;
     $s::configure('mapping', ['users_id' => $owner, 'approvers_id' => $manager, 'directors_id' => $director]);
     $s::configure('staff', ['users_id' => $it]);
+    $s::configure('manager', ['users_id' => $manager]);
     rejects(fn() => $s::configure('mapping', ['users_id' => $owner, 'approvers_id' => $manager, 'directors_id' => $manager]));
     $_SESSION['glpiactiveprofile']['config'] = 0;
     $base = ['title' => "Email O'Reilly <script>alert(1)</script>", 'type' => 'email', 'email_service' => 'new',
@@ -95,6 +96,9 @@ try {
     $act('save', $base); $act('submit');
     $_SESSION['glpiID'] = $manager; $act('approve');
     $_SESSION['glpiID'] = $director; $act('approve');
+    $_SESSION['glpiID'] = $it; rejects(fn() => $s::get($id));
+    $_SESSION['glpiID'] = $manager; $act('assign', ['assigned_id' => $it]);
+    $_SESSION['glpiID'] = $director; rejects(fn() => $act('assign', ['assigned_id' => $director]));
     $_SESSION['glpiID'] = $it; $act('ask', ['note' => 'Konfirmasi lokasi']);
     $_SESSION['glpiID'] = $owner; $act('answer', ['note' => 'Cikarang']);
     check($row()['status'] === 'queued', 'Answer resumes queued state');
@@ -121,6 +125,7 @@ try {
     $oact('submit'); check((int) $orow()['directors_id']===0,'No director on Office request');
     $_SESSION['glpiID']=$manager; $oact('approve');
     check($orow()['status']==='queued','Office skips director stage');
+    $_SESSION['glpiID']=$manager; $oact('assign',['assigned_id'=>$it]);
     $_SESSION['glpiID']=$it; $oact('start',['target_date'=>date('Y-m-d')]); $oact('finish',['note'=>'Lisensi diperiksa dan Office dipasang']);
     check($orow()['status']==='done','Office completes');
     // Rejection at director stage never exposes an email request to IT.

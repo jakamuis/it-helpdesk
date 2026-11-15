@@ -7,8 +7,10 @@ import hashlib
 import re
 import html
 from status_notifier import StatusNotifier
+from request_notifier import RequestNotifier
 
 status_notifier = StatusNotifier()
+request_notifier = RequestNotifier()
 
 urllib3.disable_warnings()
 
@@ -1084,6 +1086,11 @@ if __name__ == "__main__":
                 MAPPING_FILE, _get_conn, get_glpi_session, kill_glpi_session,
                 GLPI_URL, APP_TOKEN, GLPI_TIMEOUT_SECONDS, send_whatsapp,
             )
+
+            try:
+                request_notifier.poll(_get_conn, send_whatsapp)
+            except Exception as request_error:
+                print("Request notification failed:", type(request_error).__name__)
 
             process_chats()
 

@@ -65,3 +65,9 @@ Integration test hanya untuk lokal, memakai akun fixture yang tersedia, membuat 
 HTTP test menguji halaman terautentikasi, POST tanpa/dengan CSRF, upload dan download lampiran beserta integritas file. Draft, berkas, dan session sementara dihapus dalam `finally`. Jangan jalankan pada server.
 
 Uninstall mempertahankan tabel riwayat dan berkas. Backup database GLPI dan direktori `files/_plugins/itrequest` bersama-sama.
+
+## Update cloud 0.3.0
+
+Versi 0.3.0 menambahkan IT Manager sebagai assignator dan membatasi pelaksana IT ke Request yang ditugaskan. Update/install plugin diperlukan untuk membuat tabel Manager dan kontak WA sebelum source baru dipakai. Nomor WA diverifikasi serta dipetakan oleh admin; feed dan middleware Request opsional, nonaktif tanpa konfigurasi. Email tetap belum diimplementasikan.
+
+Lihat [panduan cloud/server](../../docs/LAYANAN-TI-CLOUD.md) untuk perubahan perilaku, migrasi, alias portal, konfigurasi WA, pengujian dan rollback. Catatan 0.2.0 di atas adalah baseline; mekanisme mengambil pekerjaan sendiri digantikan penugasan Manager pada 0.3.0.

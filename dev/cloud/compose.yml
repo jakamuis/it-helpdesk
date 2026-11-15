@@ -1,0 +1,36 @@
+# Isolated development only. Never point this database at the server.
+name: layanan-ti-dev
+services:
+  db:
+    image: mariadb:10.11
+    environment:
+      MARIADB_RANDOM_ROOT_PASSWORD: '1'
+      MARIADB_DATABASE: glpi
+      MARIADB_USER: glpi
+      MARIADB_PASSWORD: ${CLOUD_DB_PASSWORD:?Set a separate cloud fixture password}
+    volumes:
+      - db:/var/lib/mysql
+    healthcheck:
+      test: [CMD, healthcheck.sh, --connect, --innodb_initialized]
+      interval: 5s
+      retries: 30
+  glpi:
+    image: glpi/glpi:11.0.8
+    ports:
+      - '127.0.0.1:8080:80'
+    environment:
+      GLPI_DB_HOST: db
+      GLPI_DB_PORT: '3306'
+      GLPI_DB_NAME: glpi
+      GLPI_DB_USER: glpi
+      GLPI_DB_PASSWORD: ${CLOUD_DB_PASSWORD:?Set a separate cloud fixture password}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - glpi:/var/glpi
+      - ../../glpi-plugins/itrequest:/var/www/glpi/plugins/itrequest:ro
+      - ../../glpi-plugins/layananit:/var/www/glpi/plugins/layananit:ro
+volumes:
+  db:
+  glpi:

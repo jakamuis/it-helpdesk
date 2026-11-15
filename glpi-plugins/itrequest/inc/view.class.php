@@ -100,12 +100,12 @@ class PluginItrequestView
             echo '</dl>';
         }
         $actions = ['change' => 'Kembalikan untuk perubahan kebutuhan dan approval ulang', 'submit' => 'Kirim ke atasan', 'withdraw' => 'Tarik ke draft', 'approve' => 'Setujui',
-            'revise' => 'Minta revisi', 'reject' => 'Tolak', 'start' => 'Ambil dan mulai proses', 'ask' => 'Minta kelengkapan',
+            'revise' => 'Minta revisi', 'reject' => 'Tolak', 'start' => 'Mulai pekerjaan', 'ask' => 'Minta kelengkapan',
             'answer' => 'Kirim kelengkapan', 'finish' => 'Selesaikan', 'it_reject' => 'Tolak secara teknis', 'cancel' => 'Batalkan'];
         echo '<hr><div class="row">';
         foreach ($actions as $action => $label) {
             try { PluginItrequestWorkflow::transition($r['status'], $action, $owner,
-                PluginItrequestService::currentApprover($r) === PluginItrequestService::uid(), PluginItrequestService::staff((int) $r['entities_id']), (string) ($p['type'] ?? '')); }
+                PluginItrequestService::currentApprover($r) === PluginItrequestService::uid(), PluginItrequestService::worker($r), (string) ($p['type'] ?? '')); }
             catch (InvalidArgumentException $e) { continue; }
             if ($action === 'approve') { $label = $r['status'] === 'approval' && ($p['type'] ?? '') === 'email' ? 'Mengetahui — teruskan ke direktur' : 'Setujui — teruskan ke IT'; }
             echo '<div class="col-md-6">'; self::form($action, $r);
@@ -115,13 +115,26 @@ class PluginItrequestView
             if ($action === 'start') { self::field('target_date', 'Target selesai', '', 'date', true); }
             self::button($label, in_array($action, ['reject','cancel','it_reject'], true) ? 'outline-danger' : 'primary'); echo '</div>';
         }
-        echo '</div><hr><h3>Lampiran</h3>';
+        echo '</div>';
+        if (PluginItrequestService::manager((int) $r['entities_id']) && !empty($r['approved_at']) && in_array($r['status'], ['queued','processing','information'], true)) {
+            echo '<h3>Penugasan IT</h3>'; self::form('assign', $r);
+            echo '<label class="form-label">PIC IT<select class="form-select" name="assigned_id" required>';
+        foreach (PluginItrequestService::rows('staff', ['entities_id' => $r['entities_id']]) as $member) {
+                $uid = (int) $member['users_id'];
+                if (!PluginItrequestService::member($uid, (int) $r['entities_id'])) { continue; }
+                echo '<option value="' . $uid . '"' . ($uid === (int) $r['assigned_id'] ? ' selected' : '') . '>' . self::h(self::name($uid)) . '</option>';
+            }
+            echo '</select></label>';
+            self::field('note', 'Catatan / alasan pergantian PIC', '', 'textarea', (int) $r['assigned_id'] > 0);
+            self::button('Simpan penugasan');
+        }
+        echo '<hr><h3>Lampiran</h3>';
         foreach (PluginItrequestService::rows('attachments', ['requests_id' => $r['id']]) as $file) {
             echo '<p><a href="' . self::h(Plugin::getWebDir('itrequest') . '/front/download.php?id=' . $file['id']) . '">'
                 . self::h($file['filename']) . '</a> · ' . round($file['size'] / 1024) . ' KB</p>';
         }
         if (($owner && in_array($r['status'], ['draft','revision','information'], true))
-            || (PluginItrequestService::staff((int) $r['entities_id']) && in_array($r['status'], ['queued','processing','information'], true))) {
+            || (PluginItrequestService::worker($r) && in_array($r['status'], ['queued','processing','information'], true))) {
             self::form('upload', $r);
             echo '<p>PDF, JPG atau PNG; maksimal 10 MB per file. Lampiran ikut dapat dibaca oleh pihak yang berhak melihat request.</p><input class="form-control mb-2" type="file" name="attachment" accept=".pdf,.jpg,.jpeg,.png" required>';
             self::button('Unggah lampiran', 'outline-primary');
@@ -151,7 +164,7 @@ class PluginItrequestView
         $where = ['entities_id' => $s::entity()];
         if ($tab === 'approval') { $where['OR'] = [['approvers_id' => $s::uid(), 'status' => 'approval'], ['directors_id' => $s::uid(), 'status' => 'director_approval']]; }
         elseif ($tab === 'it') {
-            if (!$s::staff($s::entity())) { throw new RuntimeException('Anda belum terdaftar sebagai tim IT di entity ini.'); }
+            if (!($s::staff($s::entity()) || $s::manager($s::entity()))) { throw new RuntimeException('Anda belum terdaftar sebagai tim IT di entity ini.'); }
             $where['status'] = ['queued','processing','information','done','rejected','cancelled'];
         } else { $where['users_id'] = $s::uid(); }
         echo '<p>Maksimal 200 request terbaru dalam entity aktif.</p><div class="table-responsive"><table class="table table-striped"><thead><tr><th>Nomor / judul</th><th>Pemohon</th><th>Status</th><th>Dibutuhkan</th><th>Target IT</th></tr></thead><tbody>';
@@ -182,6 +195,16 @@ class PluginItrequestView
         }
         echo '</ul><h3>Anggota tim IT</h3>';
         self::form('staff'); User::dropdown(['name' => 'users_id', 'entity' => PluginItrequestService::entity(), 'right' => 'all']); self::button('Tambahkan anggota IT');
+        echo '<h3>WhatsApp pemohon</h3><p>Admin harus memverifikasi kepemilikan nomor sebelum menyimpan. Tidak mengirim pesan uji otomatis.</p>';
+        self::form('contact'); User::dropdown(['name' => 'users_id', 'entity' => PluginItrequestService::entity(), 'right' => 'all']);
+        self::field('chat_id', 'Nomor WA terverifikasi (628xxxxxxxxxx@c.us)', '', 'text', true); self::button('Simpan kontak WA');
+        echo '<h3>IT Manager</h3><p>Manager menerima antrean dan menunjuk PIC. Hak approval bisnis tetap mengikuti pemetaan approver.</p>';
+        self::form('manager'); User::dropdown(['name' => 'users_id', 'entity' => PluginItrequestService::entity(), 'right' => 'all']); self::button('Tambahkan IT Manager');
+        foreach (PluginItrequestService::rows('managers', ['entities_id' => PluginItrequestService::entity()]) as $m) {
+            self::form('remove_manager');
+            echo '<input type="hidden" name="users_id" value="' . (int) $m['users_id'] . '">' . self::h(self::name((int) $m['users_id']));
+            self::button('Hapus akses Manager', 'outline-danger');
+        }
         foreach (PluginItrequestService::rows('staff', ['entities_id' => PluginItrequestService::entity()]) as $m) {
             self::form('remove_staff'); echo '<input type="hidden" name="users_id" value="' . (int) $m['users_id'] . '">' . self::h(self::name((int) $m['users_id'])) . ' '; self::button('Hapus akses IT', 'outline-danger');
         }

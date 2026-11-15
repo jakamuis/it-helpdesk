@@ -9,7 +9,7 @@ prefix="$_SERVER['HTTP_HOST']='localhost:8080'; $_SERVER['SERVER_PORT']='80'; re
 cookie=urllib.request.urlopen('http://localhost:8080/').headers['Set-Cookie'].split('=',1)[0]
 prefix += 'session_name('+json.dumps(cookie)+'); session_save_path(GLPI_SESSION_DIR); '
 code=prefix+"Session::start(); $u=new User(); $u->getFromDBbyName('glpi'); $a=new Auth(); $a->auth_succeded=true; $a->user=$u; Session::init($a); echo json_encode([session_name(), session_id()]); session_write_close();"
-r=subprocess.run(['docker','exec','-u','www-data','glpi_app','php','-r',code],capture_output=True,text=True,check=True)
+r=subprocess.run(['docker','exec','-u','www-data',os.environ.get('GLPI_TEST_CONTAINER', 'glpi_app'),'php','-r',code],capture_output=True,text=True,check=True)
 name,sid=json.loads(r.stdout)
 base='http://localhost:8080/plugins/itrequest/'
 fixture_id=0
@@ -65,6 +65,6 @@ try:
 finally:
     if fixture_id:
         cleanup=prefix+"require '/var/www/glpi/plugins/itrequest/inc/attachment.class.php'; $id="+str(fixture_id)+"; foreach (PluginItrequestService::rows('attachments',['requests_id'=>$id]) as $a) { $p=PluginItrequestAttachment::directory().'/'.$a['storage_key']; if (is_file($p)) unlink($p); } foreach (['attachments','events'] as $t) $DB->delete(PluginItrequestService::PREFIX.$t,['requests_id'=>$id]); $DB->delete(PluginItrequestService::PREFIX.'requests',['id'=>$id]);"
-        subprocess.run(['docker','exec','-u','www-data','glpi_app','php','-r',cleanup],capture_output=True,check=True)
+        subprocess.run(['docker','exec','-u','www-data',os.environ.get('GLPI_TEST_CONTAINER', 'glpi_app'),'php','-r',cleanup],capture_output=True,check=True)
     destroy=prefix+'session_id('+json.dumps(sid)+'); Session::start(); session_destroy();'
-    subprocess.run(['docker','exec','-u','www-data','glpi_app','php','-r',destroy],capture_output=True,check=True)
+    subprocess.run(['docker','exec','-u','www-data',os.environ.get('GLPI_TEST_CONTAINER', 'glpi_app'),'php','-r',destroy],capture_output=True,check=True)

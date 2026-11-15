@@ -8,7 +8,7 @@ if (!Plugin::isPluginActive('itrequest') || ($_SERVER['REQUEST_METHOD'] ?? '') !
 // GLPI 11 CheckCsrfListener validates POST tokens before reaching this controller.
 $id = max(0, (int) ($_POST['id'] ?? 0));
 $action = (string) ($_POST['action'] ?? '');
-$config = in_array($action, ['mapping','staff','remove_staff'], true);
+$config = in_array($action, ['mapping','staff','remove_staff','manager','remove_manager','contact'], true);
 try {
     if ($config) { PluginItrequestService::configure($action, $_POST); }
     elseif ($action === 'upload') { PluginItrequestAttachment::upload($id, $_POST, $_FILES['attachment'] ?? []); }

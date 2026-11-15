@@ -16,7 +16,7 @@ class PluginItrequestAttachment
             $r = PluginItrequestService::get($id);
             $owner = (int) $r['users_id'] === PluginItrequestService::uid();
             $can = ($owner && in_array($r['status'], ['draft','revision','information'], true))
-                || (PluginItrequestService::staff((int) $r['entities_id']) && in_array($r['status'], ['queued','processing','information'], true));
+                || (PluginItrequestService::worker($r) && in_array($r['status'], ['queued','processing','information'], true));
             if (!$can || (int) ($input['version'] ?? 0) !== (int) $r['version']) { throw new InvalidArgumentException('Upload tidak diizinkan atau halaman sudah berubah.'); }
             if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || !is_uploaded_file($file['tmp_name'] ?? '')) { throw new InvalidArgumentException('Pilih file yang valid; cek batas upload server.'); }
             $size = filesize($file['tmp_name']);
