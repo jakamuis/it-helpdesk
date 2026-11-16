@@ -44,6 +44,9 @@ try:
         shell = json.loads(response.read())
         assert 'lti-sidebar' in shell['sidebar'] and 'samator-logo.png' in shell['sidebar']
     with native_page('/front/central.php') as response:
+        assert '/plugins/layananit/front/index.php' in response.url
+        assert 'lti-sidebar' in response.read().decode()
+    with native_page('/front/central.php?legacy=1') as response:
         assert 'public/workspace.js' not in response.read().decode()
     with native_page('/plugins/layananit/front/index.php') as response:
         assert 'lti-sidebar' in response.read().decode()

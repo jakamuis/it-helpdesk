@@ -2,6 +2,9 @@
 require_once dirname(__DIR__, 3) . '/inc/includes.php';
 require_once dirname(__DIR__) . '/inc/view.class.php';
 Session::checkLoginUser();
+if (Plugin::isPluginActive('layananit') && ($_SESSION['glpiactiveprofile']['interface'] ?? '') === 'helpdesk' && Plugin::isPluginActive('itrequest')) {
+    Html::redirect(Plugin::getWebDir('itrequest') . '/front/index.php');
+}
 if (!Plugin::isPluginActive('layananit') || ($_SESSION['glpiactiveprofile']['interface'] ?? '') !== 'central') {
     throw new Glpi\Exception\Http\AccessDeniedHttpException();
 }

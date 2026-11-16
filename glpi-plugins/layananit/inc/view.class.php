@@ -31,7 +31,7 @@ class PluginLayananitView
             echo '<a' . ($key === $page ? ' aria-current="page" class="active"' : '') . ' href="' . $h(self::url($key)) . '"><i aria-hidden="true" class="ti ' . $icon . '"></i>' . $h($label) . '</a>';
         }
         echo '</nav>';
-        if (self::admin()) { echo '<div class="lti-developer"><strong>Developer</strong><p>Halaman asli GLPI</p><a href="' . $h(self::native('/front/central.php')) . '">〈/〉 Buka GLPI</a></div>'; }
+        if (self::admin()) { echo '<div class="lti-developer"><strong>Developer</strong><p>Halaman asli GLPI</p><a href="' . $h(self::native('/front/central.php?legacy=1')) . '">〈/〉 Buka GLPI</a></div>'; }
         echo '</aside><main class="lti-main"><div class="lti-top"><span>Layanan TI / ' . $h($links[$page][0] ?? 'Dashboard') . '</span><span>' . $h($_SESSION['glpifriendlyname'] ?? $_SESSION['glpiname'] ?? '') . ' · ' . $h(Dropdown::getDropdownName('glpi_entities', (int) ($_SESSION['glpiactive_entity'] ?? 0))) . '</span></div><div class="lti-content">';
     }
     public static function footer(): void { echo '<footer class="lti-footer">Layanan TI · Data mengikuti hak akses dan entity GLPI.</footer></div></main></div>'; }
