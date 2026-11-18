@@ -20,6 +20,7 @@ function plugin_init_layananit()
         }
     }
 
+    $PLUGIN_HOOKS['post_prepareadd']['layananit'] = [Ticket::class => 'plugin_layananit_format_portal_ticket'];
     $PLUGIN_HOOKS['menu_toadd']['layananit'] = ['tools' => 'PluginLayananitMenu'];
 }
 function plugin_version_layananit()

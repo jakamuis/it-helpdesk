@@ -10,6 +10,15 @@ class PluginItrequestView
         return $id && $u->getFromDB($id) ? $u->getFriendlyName() : '—';
     }
     public static function number(array $r): string { return 'REQ-' . substr($r['created_at'], 0, 4) . '-' . str_pad((string) $r['id'], 6, '0', STR_PAD_LEFT); }
+    public static function title(array $payload): string
+    {
+        $fields = $payload['_glpi_ticket']['fields'] ?? null;
+        if (!$fields) {
+            return self::h(($payload['title'] ?? '') ?: '(Tanpa judul)');
+        }
+        return self::h($fields['name']) . ' - <strong>' . self::h($fields['site']) . '</strong> - ' . self::h($fields['summary']);
+    }
+
     public static function field(string $name, string $label, string $value = '', string $type = 'text', bool $required = false): void
     {
         echo '<label class="form-label d-block mb-3">' . self::h($label);
@@ -67,7 +76,7 @@ class PluginItrequestView
     public static function detail(array $r): void
     {
         $p = json_decode($r['payload'], true);
-        echo '<h2>' . self::h(self::number($r)) . ' · ' . self::h($p['title'] ?: '(Tanpa judul)') . '</h2>';
+        echo '<h2>' . self::h(self::number($r)) . ' · ' . self::title($p) . '</h2>';
         echo '<p><span class="badge bg-blue-lt">' . self::h(PluginItrequestWorkflow::STATES[$r['status']]) . '</span> · Pemohon: '
             . self::h(self::name((int) $r['users_id'])) . ' · Atasan: ' . self::h(self::name((int) $r['approvers_id']))
             . ' · Direktur: ' . self::h(self::name((int) ($r['directors_id'] ?? 0))) . ' · PIC IT: ' . self::h(self::name((int) $r['assigned_id'])) . ' · Target: ' . self::h($r['target_date'] ?: '—') . '</p>';
@@ -172,7 +181,7 @@ class PluginItrequestView
         foreach ($rows as $r) {
             try { $s::get((int) $r['id']); } catch (RuntimeException $e) { continue; }
             $p = json_decode($r['payload'], true);
-            echo '<tr><td><a href="' . self::h(self::url() . '?id=' . $r['id']) . '">' . self::h(self::number($r)) . '</a><br>' . self::h($p['title'] ?: '(Tanpa judul)') . '</td><td>'
+            echo '<tr><td><a href="' . self::h(self::url() . '?id=' . $r['id']) . '">' . self::h(self::number($r)) . '</a><br>' . self::title($p) . '</td><td>'
                 . self::h(self::name((int) $r['users_id'])) . '</td><td>' . self::h(PluginItrequestWorkflow::STATES[$r['status']]) . '</td><td>'
                 . self::h($p['needed_date']) . '</td><td>' . self::h($r['target_date']) . '</td></tr>';
         }

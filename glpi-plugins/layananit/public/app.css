@@ -18,3 +18,8 @@ body:has(.lti)>.page>aside.navbar,body:has(.lti)>.page>.page-wrapper>header{disp
 .lti-ticket-form [data-testid="form-field-requesttypes_id"],
 .lti-ticket-form [data-testid="form-field-urgency"],
 .lti-ticket-form [data-testid="form-field-impact"]{display:none!important}
+
+.lti-ticket-alerts{position:fixed;right:1rem;bottom:1rem;z-index:1050;display:grid;gap:.5rem;width:min(28rem,calc(100vw - 2rem));max-height:50vh;overflow:auto}
+.lti-ticket-alert{display:flex;align-items:start;gap:.75rem;padding:.75rem 1rem;background:var(--tblr-bg-surface,#fff);border:1px solid var(--tblr-border-color,#d9e0e9);border-radius:.5rem;box-shadow:0 .25rem 1rem #0002}
+.lti-ticket-alert a{flex:1}
+.lti-ticket-alert button{background:none;border:0;color:inherit;font-size:1.25rem;line-height:1;cursor:pointer}

@@ -29,7 +29,11 @@ def call_triage(conversation_id: str, message: str):
             state["priority"] = active_conv.get("ai_priority")
             try:
                 if active_conv.get("collected_fields"):
-                    state.update(json.loads(active_conv["collected_fields"]))
+                    collected = json.loads(active_conv["collected_fields"])
+                    intake = collected.pop("intake", {})
+                    state.update(collected)
+                    state.update({"user_name": intake.get("name") or None,
+                                  "site": intake.get("site") or state.get("site")})
                 if active_conv.get("questions_asked"):
                     state["questions_asked"] = json.loads(active_conv["questions_asked"])
             except (TypeError, ValueError, json.JSONDecodeError):

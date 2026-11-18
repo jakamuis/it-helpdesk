@@ -65,6 +65,32 @@ class PluginItrequestService
         self::insert('events', ['requests_id' => $id, 'users_id' => self::uid(), 'action' => $action,
             'details' => json_encode($details, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE), 'created_at' => date('Y-m-d H:i:s')]);
     }
+    private static function createPortalTicket(array $request, array $data): array
+    {
+        require_once dirname(__DIR__, 2) . '/layananit/inc/ticketformat.class.php';
+        $entity = (int) $request['entities_id'];
+        $requester = (int) $request['users_id'];
+        $fields = PluginLayananitTicketFormat::portalFields($requester, $data['location'], $data['title'], $data['reason']);
+        $url = Plugin::getWebDir('itrequest') . '/front/index.php?id=' . (int) $request['id'];
+        $ticket = new Ticket();
+        $id = $ticket->add([
+            '_layananit_portal_ticket' => true,
+            '_users_id_requester' => $requester,
+            '_skip_auto_assign' => true,
+            'type' => Ticket::DEMAND_TYPE,
+            'entities_id' => $entity,
+            'locations_id' => PluginLayananitTicketFormat::locationId($fields['site'], $entity),
+            'name' => PluginLayananitTicketFormat::portalTitle($fields),
+            'content' => '[HELPDESK_PORTAL_V1]<br>' . htmlescape($data['title']) . '<br>'
+                . nl2br(htmlescape($data['reason'])) . '<br><a href="' . htmlescape($url)
+                . '">Pengajuan dan persetujuan Request IT</a>',
+        ]);
+        if (!$id) {
+            throw new RuntimeException('Tiket GLPI untuk pengajuan ini gagal dibuat.');
+        }
+        return ['id' => (int) $id, 'fields' => $fields];
+    }
+
     public static function mutate(int $id, string $action, array $input): int
     {
         global $DB;
@@ -72,6 +98,7 @@ class PluginItrequestService
         try {
             if ($action === 'create') {
                 $data = PluginItrequestWorkflow::payload($input, false);
+                $data['_helpdesk_v1'] = Plugin::isPluginActive('layananit');
                 $now = date('Y-m-d H:i:s');
                 $id = self::insert('requests', ['entities_id' => self::entity(), 'users_id' => self::uid(),
                     'status' => 'draft', 'payload' => json_encode($data, JSON_THROW_ON_ERROR), 'created_at' => $now, 'updated_at' => $now]);
@@ -108,6 +135,7 @@ class PluginItrequestService
                 } elseif ($action === 'save') {
                     if (!$owner || !in_array($r['status'], ['draft','revision'], true)) { throw new InvalidArgumentException('Isi request tidak dapat diedit pada status ini.'); }
                     $data = PluginItrequestWorkflow::payload($input, false);
+                    $data += array_intersect_key($payload, array_flip(['_helpdesk_v1', '_glpi_ticket']));
                     $changes['payload'] = json_encode($data, JSON_THROW_ON_ERROR);
                     $details['snapshot'] = $data;
                 } else {
@@ -130,6 +158,11 @@ class PluginItrequestService
                         $details['policy_accepted_by'] = self::uid();
                         $details['snapshot'] = $data;
                         $details['approvers_id'] = $aid;
+                        if (!empty($payload['_helpdesk_v1']) && empty($payload['_glpi_ticket']) && Plugin::isPluginActive('layananit')) {
+                            $payload['_glpi_ticket'] = self::createPortalTicket($r, $data);
+                            $changes['payload'] = json_encode($payload, JSON_THROW_ON_ERROR);
+                        }
+
                     }
                     if ($action === 'change') { $changes += ['assigned_id' => 0, 'target_date' => '', 'approved_at' => null]; }
                     if ($action === 'approve') {
