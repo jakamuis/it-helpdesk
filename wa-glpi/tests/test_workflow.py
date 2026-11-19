@@ -3,6 +3,7 @@ import sqlite3
 import json
 import time
 from unittest.mock import patch, MagicMock
+from threading import Event
 
 import sys
 import os
@@ -35,7 +36,7 @@ spec.loader.exec_module(middleware_app)
 
 
 @pytest.mark.parametrize("finished_status", [5, 6])
-def test_finished_ticket_starts_fresh_before_ai_reads_context(
+def test_finished_ticket_starts_fresh_before_background_classification(
     mock_glpi, mock_waha, mock_triage, monkeypatch, finished_status,
 ):
     create, followup = mock_glpi
@@ -46,7 +47,7 @@ def test_finished_ticket_starts_fresh_before_ai_reads_context(
     def fresh_triage(phone, message):
         conn = _get_conn()
         try:
-            assert get_active_conversation(conn, phone) is None
+            assert get_active_conversation(conn, phone)["glpi_ticket_id"] == "101"
         finally:
             conn.close()
         return {
@@ -57,27 +58,12 @@ def test_finished_ticket_starts_fresh_before_ai_reads_context(
     monkeypatch.setattr(middleware_app, "call_triage", fresh_triage)
     middleware_app._process_chat_message("User", sender, "internet lambat", f"new-{finished_status}")
     assert create.call_count == 2
-    followup.assert_not_called()
+    assert all(call.kwargs.get("private") for call in followup.call_args_list)
     conn = _get_conn()
     try:
         assert get_active_conversation(conn, sender)["glpi_ticket_id"] == "101"
     finally:
         conn.close()
-
-
-def test_ready_confirmation_retries_failed_send_and_is_not_repeated(mock_waha):
-    conn = _get_conn()
-    response = {"status": "ready_for_ticket", "human_review_required": False}
-    mock_waha.side_effect = RuntimeError("temporary send failure")
-    with pytest.raises(RuntimeError):
-        middleware_app._send_triage_ready_once(conn, "ready@lid", "100", "ready-conv", response)
-    mock_waha.side_effect = None
-    middleware_app._send_triage_ready_once(conn, "ready@lid", "100", "ready-conv", response)
-    middleware_app._send_triage_ready_once(conn, "ready@lid", "100", "ready-conv", response)
-    assert mock_waha.call_count == 2
-    assert "#100" in mock_waha.call_args.args[1]
-    assert "sudah lengkap" in mock_waha.call_args.args[1]
-    conn.close()
 
 
 def test_followups_pagination_honors_actual_page_size(monkeypatch):
@@ -142,7 +128,7 @@ def test_welcome_is_fast_persistent_and_does_not_create_ticket(
     mock_glpi[0].assert_not_called()
     conn = _get_conn()
     try:
-        conn.execute("UPDATE welcome_replies SET sent_at=sent_at-601")
+        conn.execute("UPDATE conversations SET expires_at=0 WHERE status='welcomed'")
         conn.commit()
     finally:
         conn.close()
@@ -175,14 +161,15 @@ def test_greeting_during_active_ticket_preserves_triage_context(
     after = get_active_conversation(conn, sender)
     assert before == after
     assert mock_glpi[0].call_count == 1
-    mock_glpi[1].assert_not_called()
+    assert all(call.kwargs.get("private") for call in mock_glpi[1].call_args_list)
     assert not middleware_app._is_greeting("halo printer rusak")
     conn.close()
 
 @pytest.fixture(autouse=True)
 def mock_env(monkeypatch, tmp_path):
-    monkeypatch.setenv("AI_TRIAGE_ENABLED", "true")
-    monkeypatch.setattr("state_manager.DB_PATH", "file::memory:?cache=shared")
+    monkeypatch.setattr(middleware_app, "call_triage", lambda *_: None)
+    monkeypatch.setattr(middleware_app._ai_pool, "submit", lambda fn, *args: fn(*args))
+    monkeypatch.setattr("state_manager.DB_PATH", str(tmp_path / "workflow.sqlite"))
     monkeypatch.setattr("state_manager.MESSAGE_RETRY_DELAY_SECONDS", 0)
     monkeypatch.setattr(
         middleware_app,
@@ -209,7 +196,7 @@ def mock_glpi(monkeypatch):
     monkeypatch.setattr(middleware_app, "create_ticket", mock_create)
     mock_followup = MagicMock(return_value={"id": 200})
     monkeypatch.setattr(middleware_app, "create_followup", mock_followup)
-    monkeypatch.setattr(middleware_app, "send_ticket_reply", MagicMock())
+    monkeypatch.setattr(middleware_app, "update_ticket_fields", MagicMock())
     return mock_create, mock_followup
 
 @pytest.fixture
@@ -269,9 +256,9 @@ def test_printer_progressive_enrichment(mock_glpi, mock_waha, mock_triage):
     # Assert ticket created immediately
     assert create_ticket_mock.called
     assert "printer saya rusak" in create_ticket_mock.call_args[0][3]
-    # Assert AI question asked
+    # Intake asks only for the missing reporter and branch.
     assert mock_waha.called
-    assert "Gejala atau pesan error apa yang terlihat?" in mock_waha.call_args[0][1]
+    assert "nama Anda dan cabang" in mock_waha.call_args[0][1]
 
     # 2. Next answer "kertasnya macet" updates same ticket
     chats = [{
@@ -288,7 +275,7 @@ def test_printer_progressive_enrichment(mock_glpi, mock_waha, mock_triage):
 
     # 3. Repeated message does nothing
     process_mock_chats(chats)
-    assert create_followup_mock.call_count == 1
+    assert sum("marker" in call.kwargs for call in create_followup_mock.call_args_list) == 1
 
 def test_greeting_no_ticket(mock_glpi, mock_waha, mock_triage):
     create_ticket_mock, _ = mock_glpi
@@ -300,14 +287,15 @@ def test_greeting_no_ticket(mock_glpi, mock_waha, mock_triage):
     assert not create_ticket_mock.called
 
 def test_critical_incident_escalates(mock_glpi, mock_waha, mock_triage):
-    create_ticket_mock, _ = mock_glpi
+    create_ticket_mock, followup = mock_glpi
     chats = [{
         "name": "User",
         "lastMessage": {"id": "msg4", "from": "125@lid", "body": "pabrik mati total"}
     }]
     process_mock_chats(chats)
     assert create_ticket_mock.called
-    assert "HUMAN ESCALATION REQUIRED: Factory Down" in create_ticket_mock.call_args[0][3]
+    assert "HUMAN ESCALATION REQUIRED: Factory Down" in followup.call_args.args[2]
+    assert followup.call_args.kwargs["private"]
 
 def test_ai_failure_fallback(mock_glpi, mock_waha, mock_triage):
     create_ticket_mock, _ = mock_glpi
@@ -358,7 +346,7 @@ def test_conversation_expiration_no_close(mock_glpi, mock_waha, mock_triage):
     process_mock_chats(chats)
     # Since expired, it should create a NEW ticket, not close the old one via API, nor append.
     assert create_ticket_mock.call_count == 2
-    assert create_followup_mock.call_count == 0
+    assert all(call.kwargs.get("private") for call in create_followup_mock.call_args_list)
 
 def test_helpdesk_overwrite_protection(mock_glpi, mock_waha, mock_triage):
     create_ticket_mock, create_followup_mock = mock_glpi
@@ -374,10 +362,8 @@ def test_helpdesk_overwrite_protection(mock_glpi, mock_waha, mock_triage):
         "lastMessage": {"id": "msg_hd_2", "from": "777@lid", "body": "pabrik mati total"}
     }]
     process_mock_chats(chats)
-    # It appended a follow-up with the new category, DID NOT update GLPI native ticket
-    assert create_followup_mock.call_count == 1
-    assert "AI Triage Updated Info" in create_followup_mock.call_args[0][2]
-    assert "Category: network" in create_followup_mock.call_args[0][2]
+    assert create_followup_mock.call_args.args[2] == "pabrik mati total"
+    middleware_app.update_ticket_fields.assert_not_called()
 
 def test_failed_retryable(mock_glpi, mock_waha, mock_triage):
     create_ticket_mock, _ = mock_glpi
@@ -463,33 +449,21 @@ def test_ai_disabled_starts_new_ticket_after_conversation_ttl(
     create_followup_mock.assert_not_called()
 
 
-def test_standard_retry_recovers_initial_ticket_before_creating_followup(
-    mock_glpi,
-    monkeypatch,
-):
-    _, create_followup_mock = mock_glpi
-    save_mapping_mock = MagicMock()
+def test_retry_recovers_ambiguous_create(mock_glpi, mock_waha, monkeypatch):
+    create, followup = mock_glpi
+    create.side_effect = RuntimeError("response lost after GLPI created ticket")
     monkeypatch.setattr(middleware_app, "find_ticket_by_marker", lambda *_: "101")
-    monkeypatch.setattr(middleware_app, "save_mapping", save_mapping_mock)
+    args = ("User", "906@lid", "Laptop tidak menyala", "msg_standard_recovery")
+    assert middleware_app._process_chat_message(*args) is False
+    assert middleware_app._process_chat_message(*args) is True
+    create.assert_called_once()
+    followup.assert_not_called()
+    mock_waha.assert_called_once()
+    assert "#101" in mock_waha.call_args.args[1]
 
-    ticket_id, created = middleware_app._standard_process_flow(
-        "mock_token",
-        "User",
-        "906@lid",
-        "Laptop tidak menyala",
-        "msg_standard_recovery",
-        existing_ticket="100",
-        remote_write_done=False,
-        retrying=True,
-    )
-
-    assert ticket_id == "101"
-    assert created is True
-    create_followup_mock.assert_not_called()
-    save_mapping_mock.assert_called_once_with("101", "906@lid")
 
 def test_unknown_human_review_is_not_dropped(mock_glpi, mock_waha, monkeypatch):
-    create_ticket_mock, _ = mock_glpi
+    create_ticket_mock, followup = mock_glpi
     monkeypatch.setattr(
         middleware_app,
         "call_triage",
@@ -521,7 +495,7 @@ def test_unknown_human_review_is_not_dropped(mock_glpi, mock_waha, monkeypatch):
     process_mock_chats(chats)
 
     assert create_ticket_mock.call_count == 1
-    assert "HUMAN ESCALATION REQUIRED" in create_ticket_mock.call_args.args[3]
+    assert "HUMAN ESCALATION REQUIRED" in followup.call_args.args[2]
 
 def test_model_reply_text_is_replaced_by_server_template(
     mock_glpi,
@@ -559,7 +533,7 @@ def test_model_reply_text_is_replaced_by_server_template(
     process_mock_chats(chats)
 
     sent_texts = [call.args[1] for call in mock_waha.call_args_list]
-    assert "Gejala atau pesan error apa yang terlihat?" in sent_texts
+    assert len(sent_texts) == 1 and "nama Anda dan cabang" in sent_texts[0]
     assert all("password Anda" not in text for text in sent_texts)
 
 def test_marked_inbound_followup_is_not_echoed_to_whatsapp(
@@ -668,3 +642,130 @@ def test_chat_polling_waits_for_working_waha_session(session_status):
         middleware_app.process_chats()
     assert get.call_count == 1
     assert get.call_args.args[0].endswith("/api/sessions/default")
+
+
+def deliver(message_id, body, sender="628000000001@lid", profile="628000000001"):
+    from webhook import handle_event
+    return handle_event({
+        "event": "message",
+        "session": "default",
+        "payload": {"id": message_id, "body": body, "from": sender, "fromMe": False,
+                    "_data": {"notifyName": profile}},
+    }, middleware_app._process_chat_message)
+
+
+def test_webhook_greeting_and_complete_report(mock_glpi, mock_waha):
+    assert deliver("a1", "Halo")
+    assert deliver("a1", "Halo")
+    assert deliver("a2", "Pagi")
+    assert mock_waha.call_count == 1
+    mock_glpi[0].assert_not_called()
+    assert deliver("a3", "Jaka - SIG Bekasi - Problem Printer")
+    assert deliver("a3", "Jaka - SIG Bekasi - Problem Printer")
+    assert middleware_app.title(mock_glpi[0].call_args.kwargs["fields"]) == "Jaka - SIG Bekasi - Problem Printer"
+    assert mock_glpi[0].call_count == 1
+    assert mock_waha.call_count == 2
+    assert mock_waha.call_args.args[1] == "Laporan Anda sudah dicatat dengan nomor tiket #100."
+
+
+def test_webhook_message_id_followup_and_partial_confirmation(mock_glpi, mock_waha):
+    assert deliver("b1", "Internet lambat di SIG Medan")
+    assert middleware_app.title(mock_glpi[0].call_args.kwargs["fields"]) == (
+        "Pelapor belum diketahui - SIG Medan - Internet lambat"
+    )
+    assert mock_waha.call_args.args[1].endswith("Boleh sebutkan nama Anda?")
+    assert deliver("b2", "Jaka")
+    assert deliver("b2", "Jaka")
+    assert deliver("b1", "Internet lambat di SIG Medan")
+    token, ticket, fields = middleware_app.update_ticket_fields.call_args.args
+    assert ticket == "100"
+    assert middleware_app.title(fields) == "Jaka - SIG Medan - Internet lambat"
+    mock_glpi[0].assert_called_once()
+    mock_glpi[1].assert_called_once()
+    mock_waha.assert_called_once()
+
+
+def test_webhook_installation_summary_and_original_po_numbers(mock_glpi, mock_waha):
+    message = "Mohon dibantu install 6 laptop Arohera PO 4594300202 dan 4594300204"
+    assert deliver("c1", message)
+    create = mock_glpi[0]
+    assert create.call_args.args[3] == message
+    assert middleware_app.title(create.call_args.kwargs["fields"]) == (
+        "Pelapor belum diketahui - Cabang belum diketahui - Permintaan instalasi 6 laptop Arohera"
+    )
+    mock_waha.assert_called_once()
+    assert "nama Anda dan cabang atau lokasi" in mock_waha.call_args.args[1]
+
+
+def test_legacy_ticket_followup_does_not_change_title(mock_glpi, mock_waha):
+    from state_manager import create_conversation
+    with _get_conn() as conn:
+        create_conversation(conn, "628000000001@lid", "42", "ready_for_ticket")
+    assert deliver("old", "Saya Jaka di SIG Bekasi")
+    middleware_app.update_ticket_fields.assert_not_called()
+    mock_glpi[0].assert_not_called()
+    mock_glpi[1].assert_called_once_with("mock_token", "42", "Saya Jaka di SIG Bekasi", marker="old")
+    mock_waha.assert_not_called()
+
+
+def test_late_model_cannot_block_intake_or_replace_reporter(mock_glpi, mock_waha, monkeypatch):
+    start = Event()
+    release = Event()
+    submitted = []
+    from concurrent.futures import ThreadPoolExecutor
+
+    def model(*_):
+        start.set()
+        assert release.wait(5)
+        return {"intent": "incident", "category": "network", "extracted_fields": {"site": "HO"}}
+
+    monkeypatch.setattr(middleware_app, "call_triage", model)
+    with ThreadPoolExecutor(1) as executor:
+        monkeypatch.setattr(middleware_app._ai_pool, "submit", lambda task, *args: submitted.append(executor.submit(task, *args)))
+        try:
+            assert deliver("slow1", "Halo, internet lambat di SIG Medan")
+            assert start.wait(2)
+            mock_waha.assert_called_once()
+            assert deliver("slow2", "Jaka")
+        finally:
+            release.set()
+        submitted[0].result(timeout=5)
+    with _get_conn() as conn:
+        current = get_active_conversation(conn, "628000000001@lid")
+    assert current["ai_category"] == "network"
+    assert json.loads(current["collected_fields"])["intake"]["name"] == "Jaka"
+    assert json.loads(current["collected_fields"])["intake"]["site"] == "SIG Medan"
+
+
+def test_glpi_create_payload_preserves_original_content(monkeypatch):
+    location, create = MagicMock(), MagicMock()
+    location.json.return_value = [{"id": 12, "name": "SIG Bekasi"}]
+    create.json.return_value = {"id": 42}
+    monkeypatch.setattr(middleware_app.requests, "get", MagicMock(return_value=location))
+    post = MagicMock(return_value=create)
+    monkeypatch.setattr(middleware_app.requests, "post", post)
+    assert middleware_app.create_ticket("dev", "Jaka", "fake@lid", "Saya Jaka di SIG Bekasi. Printer rusak. PO 4594300202") == {"id": 42}
+    payload = post.call_args.kwargs["json"]["input"]
+    assert payload["name"] == "Jaka - SIG Bekasi - Printer rusak"
+    assert payload["locations_id"] == 12
+    assert "Saya Jaka di SIG Bekasi. Printer rusak. PO 4594300202" in payload["content"]
+    assert "fake@lid" in payload["content"]
+
+
+def test_welcome_collects_identity_before_the_issue(mock_glpi, mock_waha):
+    assert deliver("hello-before-identity", "Halo")
+    assert deliver("identity-only", "Saya Jaka di SIG Bekasi")
+    mock_glpi[0].assert_not_called()
+    assert deliver("issue-after-identity", "Printer rusak")
+    assert middleware_app.title(mock_glpi[0].call_args.kwargs["fields"]) == "Jaka - SIG Bekasi - Printer rusak"
+    assert mock_waha.call_count == 2
+
+
+def test_waha_sendtext_uses_the_mocked_http_boundary(monkeypatch):
+    post = MagicMock()
+    monkeypatch.setattr(middleware_app.requests, "post", post)
+    middleware_app.send_whatsapp("628000000001@lid", "Tiket #123")
+    assert post.call_args.args[0].endswith("/api/sendText")
+    assert post.call_args.kwargs["json"] == {
+        "chatId": "628000000001@lid", "text": "Tiket #123", "session": "default",
+    }

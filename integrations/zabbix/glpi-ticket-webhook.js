@@ -138,11 +138,11 @@ var GLPi = {
 };
 
 try {
-    var params = JSON.parse(value),
+    var dataFollowup, dataProblem,
+        params = JSON.parse(value),
         glpi = {},
         url = '',
         data = {},
-        comment_data,
         result = { tags: {} },
         required_params = [
             'alert_subject', 'alert_message', 'event_source', 'event_value',
@@ -150,7 +150,6 @@ try {
             'event_id', 'trigger_id', 'zabbix_url',
             'glpi_token', 'glpi_url'
         ],
-        method = 'post',
         process_tags = true,
         response;
 
@@ -196,7 +195,8 @@ try {
 
     data = {
         'input': {
-            'name': params.alert_subject,
+            'name': params.alert_subject.indexOf('[Zabbix]') === 0
+                ? params.alert_subject : '[Zabbix] ' + params.alert_subject,
             'content': params.alert_message + '\n<a href=' + GLPi.getProblemUrl(params.zabbix_url, params.trigger_id, params.event_id, params.event_source) + '>Link to problem in Zabbix</a>',
             'status': 1,  // Set status "New"
             'urgency': Math.max(1, Math.min(5, parseInt(params.event_nseverity, 10) || 1))
@@ -213,15 +213,6 @@ try {
                 'content': params.alert_message + '\n<a href=' + GLPi.getProblemUrl(params.zabbix_url, params.trigger_id, params.event_id, params.event_source) + '>Link to problem in Zabbix</a>'
             }
         };
-        dataProblem = {
-            'id': glpi.ticket_id,
-            'input': {
-                'name': params.alert_subject,
-                'status': 5,  // Set status "Solved"
-                'urgency': Math.max(1, Math.min(5, parseInt(params.event_nseverity, 10) || 1))
-            }
-        };
-
         // Recovery adds a follow-up; a technician verifies resolution.
         GLPi.request('post', glpi.url + 'apirest.php/Ticket/' + glpi.ticket_id + '/ITILFollowup', dataFollowup);
     }
@@ -239,7 +230,6 @@ try {
         dataProblem = {
             'id': glpi.ticket_id,
             'input': {
-                'name': params.alert_subject,
                 'urgency': Math.max(1, Math.min(5, parseInt(params.event_nseverity, 10) || 1))
             }
         };
@@ -250,6 +240,14 @@ try {
 
     // In case of problem
     else {
+        if ([4, 5].indexOf(Number(params.event_nseverity)) === -1) {
+            return JSON.stringify(result);
+        }
+        var host = String(params.host_name || '').trim();
+        if (!host || host === '{HOST.NAME}') {
+            throw 'Missing resolved {HOST.NAME}.';
+        }
+        data.input.content = '[HELPDESK_ZABBIX_V1:' + encodeURIComponent(host) + ']<br>' + data.input.content;
         response = GLPi.request('post', glpi.url + 'apirest.php/Ticket/', data);
     }
 

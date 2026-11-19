@@ -3,9 +3,12 @@ import time
 import urllib3
 import json
 import os
-import hashlib
 import re
 import html
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from intake import confirmation, extract, identity_only, title
+from webhook import incoming_message, start_webhook
 from status_notifier import StatusNotifier
 from request_notifier import RequestNotifier
 from ticket_merge import recipients, read_mapping, write_mapping, poll_merges
@@ -41,8 +44,10 @@ WAHA_URL = os.getenv("WAHA_URL", "http://localhost:3001")
 # =========================================
 
 AI_TRIAGE_ENABLED = os.getenv("AI_TRIAGE_ENABLED", "false").lower() == "true"
-if AI_TRIAGE_ENABLED:
-    from ai_client import call_triage
+from ai_client import call_triage
+
+_intake_lock = threading.Lock()
+_ai_pool = ThreadPoolExecutor(max_workers=2)
 
 init_db()
 
@@ -124,104 +129,61 @@ def save_mapping(ticket_id, chat_id):
     write_mapping(MAPPING_FILE, data)
 
 # =========================================
-# FIND EXISTING TICKET
-# =========================================
-
-def find_existing_ticket(chat_id):
-
-    if not os.path.exists(MAPPING_FILE):
-        return None
-
-    with open(MAPPING_FILE, "r") as f:
-
-        data = json.load(f)
-
-    for ticket_id, saved_chat_id in reversed(list(data.items())):
-
-        if chat_id in recipients(saved_chat_id):
-
-            return ticket_id
-
-    return None
-
-# =========================================
 # FIND TICKET BY MARKER
 # =========================================
 
 def find_ticket_by_marker(session_token, marker):
-    try:
-        response = requests.get(
-            f"{GLPI_URL}/search/Ticket",
-            headers={
-                "Session-Token": session_token,
-                "App-Token": APP_TOKEN,
-            },
-            params={
-                "criteria[0][field]": 21,
-                "criteria[0][searchtype]": "contains",
-                "criteria[0][value]": marker,
-            },
-            verify=True,
-            timeout=(3.05, GLPI_TIMEOUT_SECONDS),
-        )
-        response.raise_for_status()
-        data = response.json()
-        rows = data.get("data", []) if isinstance(data, dict) else []
-        if rows and isinstance(rows[0], dict):
-            return str(rows[0].get("2", "")) or None
-    except (requests.RequestException, ValueError, TypeError):
-        return None
+    response = requests.get(
+        f"{GLPI_URL}/search/Ticket",
+        headers={
+            "Session-Token": session_token,
+            "App-Token": APP_TOKEN,
+        },
+        params={
+            "criteria[0][field]": 21,
+            "criteria[0][searchtype]": "contains",
+            "criteria[0][value]": f"[WAHA_MSG_ID: {marker}]",
+            "forcedisplay[0]": 2,
+        },
+        verify=True,
+        timeout=(3.05, GLPI_TIMEOUT_SECONDS),
+    )
+    response.raise_for_status()
+    data = response.json()
+    rows = data.get("data", []) if isinstance(data, dict) else []
+    if rows and isinstance(rows[0], dict):
+        return str(rows[0].get("2", "")) or None
     return None
 
+
 def find_followup_by_marker(session_token, ticket_id, marker):
-    """Best-effort recovery for an ambiguous follow-up write."""
-    try:
-        response = requests.get(
-            f"{GLPI_URL}/ITILFollowup",
-            headers={
-                "Session-Token": session_token,
-                "App-Token": APP_TOKEN,
-            },
-            params={"range": "0-999"},
-            verify=True,
-            timeout=(3.05, GLPI_TIMEOUT_SECONDS),
-        )
-        response.raise_for_status()
-        followups = response.json()
-        if not isinstance(followups, list):
-            return False
-        marker_text = f"[WAHA_MSG_ID: {marker}]"
-        return any(
-            isinstance(item, dict)
-            and str(item.get("items_id")) == str(ticket_id)
-            and marker_text in str(item.get("content", ""))
-            for item in followups
-        )
-    except (requests.RequestException, ValueError, TypeError):
-        return False
+    marker_text = f"[WAHA_MSG_ID: {marker}]"
+    return any(marker_text in str(row.get("content", ""))
+               for row in get_all_followups(session_token, ticket_id=ticket_id))
+
 
 # =========================================
 # CREATE GLPI TICKET
 # =========================================
 
-def create_ticket(session_token, sender_name, sender_id, message, marker=None):
+def create_ticket(session_token, sender_name, sender_id, message, marker=None, fields=None):
+    fields = fields or extract(message, sender_name)
+    ticket_title = title(fields)
 
-    ticket_title = f"[WhatsApp] {sender_name}"
-
-    ticket_content = f"""
+    ticket_content = f"""[HELPDESK_WHATSAPP_V1]
 WhatsApp Helpdesk Ticket
 
 Nama Pengirim:
-{sender_name}
+{html.escape(fields["name"] or "Pelapor belum diketahui")}
 
 WhatsApp ID:
-{sender_id}
+{html.escape(sender_id)}
 
 Pesan:
-{message}
+{html.escape(message)}
 """
     if marker:
-        ticket_content += f"\n\n[WAHA_MSG_ID: {marker}]"
+        ticket_content += f"\n\n[WAHA_MSG_ID: {html.escape(marker)}]"
 
     response = requests.post(
         f"{GLPI_URL}/Ticket",
@@ -233,6 +195,7 @@ Pesan:
         json={
             "input": {
                 "name": ticket_title,
+                **location_input(session_token, fields["site"]),
                 "content": ticket_content,
                 "priority": 3,
                 "urgency": 3,
@@ -252,11 +215,11 @@ Pesan:
 # CREATE GLPI FOLLOWUP
 # =========================================
 
-def create_followup(session_token, ticket_id, message, marker=None):
+def create_followup(session_token, ticket_id, message, marker=None, private=False):
 
-    content = message
+    content = html.escape(message)
     if marker:
-        content += f"\n\n[WAHA_MSG_ID: {marker}]"
+        content = f"[WAHA_MSG_ID: {html.escape(marker)}]\n\n{content}"
 
     response = requests.post(
         f"{GLPI_URL}/ITILFollowup",
@@ -269,7 +232,8 @@ def create_followup(session_token, ticket_id, message, marker=None):
             "input": {
                 "items_id": int(ticket_id),
                 "itemtype": "Ticket",
-                "content": content
+                "content": content,
+                "is_private": int(private),
             }
         },
         verify=True,
@@ -306,105 +270,36 @@ def send_whatsapp(chat_id, message):
 # SEND NEW TICKET REPLY
 # =========================================
 
-def ticket_reply_message(ticket_id):
-    return f"""Halo 👋
-
-Laporan Anda sudah berhasil diterima oleh IT Helpdesk.
-
-Nomor Ticket: #{ticket_id}
-
-Tim kami akan segera melakukan pengecekan dan tindak lanjut.
-
-Terima kasih 😄"""
-
-def send_ticket_reply(chat_id, ticket_id):
-    send_whatsapp(chat_id, ticket_reply_message(ticket_id))
-
-# =========================================
-# MAIN POLLING LOOP
-# =========================================
-
-TRIAGE_QUESTION_TEMPLATES = {
-    "asset_id": "Mohon informasikan nomor aset perangkat yang bermasalah.",
-    "site": "Kendala ini terjadi di lokasi atau site mana?",
-    "symptom": "Gejala atau pesan error apa yang terlihat?",
-    "printer_symptom": (
-        "Gejala pada printernya seperti apa, misalnya kertas macet, offline, "
-        "atau hasil cetak bermasalah?"
-    ),
-    "connection_type": "Koneksi yang digunakan Wi-Fi, LAN, atau VPN?",
-    "affected_scope": "Apakah kendala ini hanya dialami Anda atau juga pengguna lain?",
-    "affected_service": "Layanan atau aplikasi apa yang terdampak?",
-    "business_impact": "Apa dampak kendala ini terhadap pekerjaan atau operasional?",
-}
-
 _REMOTE_WRITE_STATUSES = {"ticket_created_or_updated", "reply_failed_retryable"}
 
-def _json_dict(value):
-    if isinstance(value, dict):
-        return dict(value)
-    if isinstance(value, str) and value:
-        try:
-            parsed = json.loads(value)
-            return parsed if isinstance(parsed, dict) else {}
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return {}
-    return {}
 
-def _json_list(value):
-    if isinstance(value, list):
-        return list(value)
-    if isinstance(value, str) and value:
-        try:
-            parsed = json.loads(value)
-            return parsed if isinstance(parsed, list) else []
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return []
-    return []
+def location_input(session_token, site):
+    if not site:
+        return {}
+    response = requests.get(
+        f"{GLPI_URL}/Location",
+        headers={"Session-Token": session_token, "App-Token": APP_TOKEN},
+        params={"searchText[name]": site, "range": "0-49"},
+        timeout=(3.05, GLPI_TIMEOUT_SECONDS),
+    )
+    if response.status_code in {403, 404}:
+        return {}
+    response.raise_for_status()
+    matches = [row["id"] for row in response.json()
+               if str(row.get("name", "")).casefold() == site.casefold()]
+    return {"locations_id": matches[0]} if len(matches) == 1 else {}
 
-def _middleware_fallback_response():
-    return {
-        "intent": "incident",
-        "category": "unknown",
-        "subcategory": "unknown",
-        "priority": "medium",
-        "confidence": 0.0,
-        "status": "ready_for_ticket",
-        "human_review_required": True,
-        "escalation_reason": "AI triage service unavailable",
-        "extracted_fields": {},
-        "missing_fields": [],
-        "next_question_key": None,
-        "suggested_response": None,
-        "fallback_used": True,
-    }
 
-def _triage_note(message_body, ai_response, heading):
-    def safe_value(key, default="unknown"):
-        value = str(ai_response.get(key) or default).replace("\n", " ").strip()
-        return value[:200]
+def update_ticket_fields(session_token, ticket_id, fields):
+    response = requests.put(
+        f"{GLPI_URL}/Ticket/{ticket_id}",
+        headers={"Session-Token": session_token, "App-Token": APP_TOKEN},
+        json={"input": {"id": int(ticket_id), "name": title(fields),
+                        **location_input(session_token, fields["site"])}},
+        timeout=(3.05, GLPI_TIMEOUT_SECONDS),
+    )
+    response.raise_for_status()
 
-    lines = [
-        message_body,
-        "",
-        f"--- {heading} ---",
-        f"Intent: {safe_value('intent')}",
-        f"Category: {safe_value('category')}",
-        f"Subcategory: {safe_value('subcategory')}",
-        f"Priority: {safe_value('priority', 'medium')}",
-    ]
-    if ai_response.get("human_review_required"):
-        reason = safe_value("escalation_reason", "review requested")
-        lines.append(f"⚠️ HUMAN ESCALATION REQUIRED: {reason}")
-    return "\n".join(lines)
-
-def _send_ticket_reply_once(conn, chat_id, ticket_id, scope):
-    reply = ticket_reply_message(ticket_id)
-    if has_reply_been_sent(conn, reply, chat_id, scope):
-        return
-    send_ticket_reply(chat_id, ticket_id)
-    mark_reply_sent(conn, reply, chat_id, scope)
-    conn.commit()
 
 def _is_greeting(message):
     normalized = re.sub(r"[\W_]+", " ", message.casefold()).strip()
@@ -416,28 +311,16 @@ def _is_greeting(message):
 
 
 def _send_welcome_once(conn, chat_id):
-    conn.execute("""CREATE TABLE IF NOT EXISTS welcome_replies (
-        phone_hash TEXT PRIMARY KEY, sent_at REAL NOT NULL)""")
-    phone_hash = hashlib.sha256(chat_id.encode()).hexdigest()
-    now = time.time()
-    row = conn.execute(
-        "SELECT sent_at FROM welcome_replies WHERE phone_hash=?", (phone_hash,),
-    ).fetchone()
-    if row and now - row[0] < 600:
+    if get_active_conversation(conn, chat_id):
         return
-    send_whatsapp(chat_id, (
+    reply = (
         "Halo 👋 Selamat datang di IT Helpdesk.\n\n"
-        "Silakan ceritakan kendala IT yang Anda alami dan lokasinya.\n"
-        "Contoh: Internet lambat di kantor Medan.\n\n"
-        "Kami akan membantu mencatat laporan dan memberikan nomor tiket Anda."
-    ))
-    conn.execute(
-        "INSERT INTO welcome_replies VALUES (?, ?) "
-        "ON CONFLICT(phone_hash) DO UPDATE SET sent_at=excluded.sent_at",
-        (phone_hash, now),
+        "Boleh sebutkan nama Anda, cabang atau lokasi, dan kendala atau bantuan IT yang dibutuhkan?\n\n"
+        "Contoh: “Saya Jaka di SIG Bekasi. Printer tidak bisa mencetak.”\n\n"
+        "Kami akan mencatat laporan Anda dan mengirimkan nomor tiketnya."
     )
-    conn.commit()
-    print("[WELCOME] Greeting reply sent")
+    send_whatsapp(chat_id, reply)
+    create_conversation(conn, chat_id, "", "welcomed")
 
 
 def get_ticket_status(session_token, ticket_id):
@@ -456,405 +339,138 @@ def get_ticket_status(session_token, ticket_id):
     return int(ticket["status"])
 
 
-def _send_triage_ready_once(conn, chat_id, ticket_id, conversation_id, ai_response):
-    if ai_response.get("status") != "ready_for_ticket" or ai_response.get("human_review_required"):
-        return
-    reply = (
-        f"✅ Informasi laporan untuk Tiket #{ticket_id} sudah lengkap "
-        "dan sudah diteruskan ke tim IT.\n\n"
-        "Kami akan mengabari Anda ketika status tiket menjadi Solved (Selesai)."
-    )
-    scope = f"triage-ready:{conversation_id}"
-    if not has_reply_been_sent(conn, reply, chat_id, scope):
-        send_whatsapp(chat_id, reply)
-        mark_reply_sent(conn, reply, chat_id, scope)
-        conn.commit()
-
-
-def _send_triage_question_once(
-    conn,
-    chat_id,
-    conversation_id,
-    ai_response,
-    questions_asked,
-):
-    if ai_response.get("status") != "collecting_information":
-        return questions_asked
-
-    question_key = ai_response.get("next_question_key")
-    reply = TRIAGE_QUESTION_TEMPLATES.get(question_key)
-    if not reply or question_key in questions_asked:
-        return questions_asked
-
-    if not has_reply_been_sent(conn, reply, chat_id, conversation_id):
-        send_whatsapp(chat_id, reply)
-        mark_reply_sent(conn, reply, chat_id, conversation_id)
-
-    questions_asked.append(question_key)
-    update_conversation(
-        conn,
-        conversation_id,
-        {"questions_asked": questions_asked},
-    )
-    conn.commit()
-    return questions_asked
-
-def _update_conversation_from_triage(conn, conversation, ai_response):
-    existing_fields = _json_dict(conversation.get("collected_fields"))
-    new_fields = ai_response.get("extracted_fields")
-    if isinstance(new_fields, dict):
-        existing_fields.update(
-            {key: value for key, value in new_fields.items() if value is not None}
-        )
-
-    questions_asked = _json_list(conversation.get("questions_asked"))
-    conversation_status = (
-        "ready_for_ticket"
-        if ai_response.get("human_review_required")
-        else ai_response.get("status", "collecting_information")
-    )
-    update_conversation(
-        conn,
-        conversation["conversation_id"],
-        {
-            "status": conversation_status,
-            "intent": ai_response.get("intent", "unknown"),
-            "ai_category": ai_response.get("category", "unknown"),
-            "ai_subcategory": ai_response.get("subcategory", "unknown"),
-            "ai_priority": ai_response.get("priority", "medium"),
-            "collected_fields": existing_fields,
-            "questions_asked": questions_asked,
-            "expires_at": time.time() + CONVERSATION_TTL_SECONDS,
-        },
-    )
-    conn.commit()
-    return questions_asked
-
-def _process_ai_message(
-    conn,
-    session_token,
-    sender_name,
-    sender_id,
-    message_body,
-    msg_id,
-    status,
-    retrying,
-    ai_response,
-):
-    active_conv = get_active_conversation(conn, sender_id)
-    ticket_id = active_conv.get("glpi_ticket_id") if active_conv else None
-    remote_write_done = status in _REMOTE_WRITE_STATUSES
-    recovered_ticket = False
-    recovered_followup = False
-
-    if retrying and not remote_write_done:
-        if ticket_id:
-            recovered_followup = find_followup_by_marker(
-                session_token,
-                ticket_id,
-                msg_id,
+def _classify(chat_id, message, conversation_id, ticket_id):
+    try:
+        result = call_triage(chat_id, message)
+        if not result:
+            return
+        conn = _get_conn()
+        try:
+            conn.execute(
+                "UPDATE conversations SET intent=?, ai_category=?, ai_subcategory=?, ai_priority=? "
+                "WHERE conversation_id=?",
+                (result.get("intent"), result.get("category"), result.get("subcategory"),
+                 result.get("priority"), conversation_id),
             )
-        else:
-            ticket_id = find_ticket_by_marker(session_token, msg_id)
-            recovered_ticket = bool(ticket_id)
-
-    if not ticket_id:
-        print("[AI TRIAGE] Actionable issue detected. Creating ticket immediately.")
-        content = _triage_note(message_body, ai_response, "AI Triage Initial Info")
-        ticket = create_ticket(
-            session_token,
-            sender_name,
-            sender_id,
-            content,
-            marker=msg_id,
-        )
-        ticket_id = str(ticket["id"])
-        remote_write_done = True
-    elif active_conv and not remote_write_done and not recovered_followup:
-        print(f"[AI TRIAGE] Appending to existing ticket: {ticket_id}")
-        classification_changed = (
-            ai_response.get("intent") != active_conv.get("intent")
-            or ai_response.get("category") != active_conv.get("ai_category")
-            or ai_response.get("priority") != active_conv.get("ai_priority")
-        )
-        followup_text = message_body
-        if classification_changed or ai_response.get("human_review_required"):
-            followup_text = _triage_note(
-                message_body,
-                ai_response,
-                "AI Triage Updated Info",
+            conn.commit()
+        finally:
+            conn.close()
+        if not result.get("fallback_used"):
+            note = "\n".join(
+                f"{label}: {result.get(key) or 'unknown'}"
+                for key, label in (("intent", "Intent"), ("category", "Category"),
+                                   ("subcategory", "Subcategory"), ("priority", "Priority"))
             )
-        create_followup(
-            session_token,
-            ticket_id,
-            followup_text,
-            marker=msg_id,
-        )
-        remote_write_done = True
-    elif recovered_ticket or recovered_followup:
-        print(f"[RECOVERY] Reused GLPI write for message {msg_id}")
-        remote_write_done = True
+            if result.get("human_review_required"):
+                note += "\nHUMAN ESCALATION REQUIRED: " + str(result.get("escalation_reason") or "review requested")
+            token = get_glpi_session()
+            if token:
+                try:
+                    create_followup(token, ticket_id, note, private=True)
+                finally:
+                    kill_glpi_session(token)
+    except Exception as exc:
+        print(f"[AI TRIAGE] {type(exc).__name__}")
 
-    if not ticket_id or not remote_write_done:
-        raise RuntimeError("GLPI write could not be confirmed")
-
-    set_message_status(conn, msg_id, sender_id, "ticket_created_or_updated")
-
-    if active_conv is None:
-        conversation_status = (
-            "ready_for_ticket"
-            if ai_response.get("human_review_required")
-            else ai_response.get("status", "collecting_information")
-        )
-        conversation_id = create_conversation(
-            conn,
-            sender_id,
-            str(ticket_id),
-            conversation_status,
-        )
-        active_conv = {
-            "conversation_id": conversation_id,
-            "glpi_ticket_id": str(ticket_id),
-            "collected_fields": {},
-            "questions_asked": [],
-        }
-
-    conn.commit()
-    save_mapping(ticket_id, sender_id)
-
-    questions_asked = _update_conversation_from_triage(
-        conn,
-        active_conv,
-        ai_response,
-    )
-
-    # Safe on every turn: the conversation-scoped hash makes this an idempotent
-    # no-op after the acknowledgement has been recorded.
-    _send_ticket_reply_once(
-        conn,
-        sender_id,
-        ticket_id,
-        active_conv["conversation_id"],
-    )
-
-    _send_triage_question_once(
-        conn,
-        sender_id,
-        active_conv["conversation_id"],
-        ai_response,
-        questions_asked,
-    )
-
-    _send_triage_ready_once(
-        conn, sender_id, ticket_id, active_conv["conversation_id"], ai_response,
-    )
-
-def _standard_process_flow(
-    session_token,
-    sender_name,
-    sender_id,
-    message_body,
-    msg_id,
-    existing_ticket=None,
-    remote_write_done=False,
-    retrying=False,
-    use_legacy_mapping=True,
-):
-    ticket_id = existing_ticket or (
-        find_existing_ticket(sender_id) if use_legacy_mapping else None
-    )
-    created = False
-
-    if ticket_id:
-        recovered_ticket = (
-            find_ticket_by_marker(session_token, msg_id)
-            if retrying and not remote_write_done
-            else None
-        )
-        if recovered_ticket:
-            save_mapping(recovered_ticket, sender_id)
-            return str(recovered_ticket), True
-
-        recovered_followup = (
-            retrying
-            and not remote_write_done
-            and find_followup_by_marker(session_token, ticket_id, msg_id)
-        )
-        if not remote_write_done and not recovered_followup:
-            print(f"\nEXISTING TICKET FOUND: {ticket_id}")
-            followup = create_followup(
-                session_token,
-                ticket_id,
-                message_body,
-                marker=msg_id,
-            )
-            print("\nFOLLOWUP CREATED:")
-            print(followup)
-        return str(ticket_id), created
-
-    recovered_ticket = find_ticket_by_marker(session_token, msg_id) if retrying else None
-    if recovered_ticket:
-        save_mapping(recovered_ticket, sender_id)
-        return str(recovered_ticket), True
-
-    ticket = create_ticket(
-        session_token,
-        sender_name,
-        sender_id,
-        message_body,
-        marker=msg_id,
-    )
-    print("\nGLPI RESPONSE:")
-    print(ticket)
-    ticket_id = str(ticket["id"])
-    save_mapping(ticket_id, sender_id)
-    print(f"\nTICKET CREATED: {ticket_id}")
-    return ticket_id, True
 
 def _process_chat_message(sender_name, sender_id, message_body, msg_id):
+    # The polling and optional webhook entry points share a single writer.
+    with _intake_lock:
+        return _process_message(sender_name, sender_id, message_body, msg_id)
+
+
+def _process_message(sender_name, sender_id, message, msg_id):
     conn = _get_conn()
-    session_token = None
+    token = None
     try:
         status = get_message_status(conn, msg_id)
         if status == "completed":
-            return
-        if status and not is_message_retry_due(conn, msg_id):
-            return
-
-        retrying = status is not None
-        if status is None:
+            return True
+        if not is_message_retry_due(conn, msg_id):
+            return False
+        if _is_greeting(message):
+            _send_welcome_once(conn, sender_id)
+        elif status not in _REMOTE_WRITE_STATUSES:
             set_message_status(conn, msg_id, sender_id, "received")
             conn.commit()
+            active = get_active_conversation(conn, sender_id)
+            opening = {}
+            if active and active["status"] == "welcomed":
+                opening = json.loads(active["collected_fields"] or "{}").get("opening", {})
+                provided = identity_only(message)
+                if provided:
+                    update_conversation(conn, active["conversation_id"], {
+                        "collected_fields": {"opening": {**opening, **provided}},
+                    })
+                    set_message_status(conn, msg_id, sender_id, "completed")
+                    conn.commit()
+                    return True
 
-        print("\n===================================")
-        print(" NEW WHATSAPP MESSAGE")
-        print("===================================")
-        print("NAME    :", sender_name)
-        print("SENDER  :", sender_id)
-        print("MESSAGE :", message_body)
-
-        # Handle simple greetings before AI/GLPI, including during an active
-        # conversation, so a greeting cannot become an answer to a triage question.
-        if _is_greeting(message_body) and status not in _REMOTE_WRITE_STATUSES:
-            _send_welcome_once(conn, sender_id)
-            set_message_status(conn, msg_id, sender_id, "completed")
-            conn.commit()
-            return
-
-
-        active_conv = get_active_conversation(conn, sender_id)
-        if active_conv and active_conv.get("glpi_ticket_id") and status not in _REMOTE_WRITE_STATUSES:
-            session_token = get_glpi_session()
-            if not session_token:
+            token = get_glpi_session()
+            if not token:
                 raise RuntimeError("GLPI session unavailable")
-            if get_ticket_status(session_token, active_conv["glpi_ticket_id"]) in {5, 6}:
-                update_conversation(conn, active_conv["conversation_id"], {
-                    "expires_at": time.time() - 1,
+
+            ticket_id = active["glpi_ticket_id"] if active and active["status"] != "welcomed" else None
+            if ticket_id and status is None and get_ticket_status(token, ticket_id) in {5, 6}:
+                update_conversation(conn, active["conversation_id"], {"expires_at": time.time() - 1})
+                conn.commit()
+                active = None
+                ticket_id = None
+
+            reply = None
+            if ticket_id:
+                stored = json.loads(active["collected_fields"] or "{}")
+                previous = stored.get("intake")
+                fields = extract(message, sender_name, previous) if previous else None
+                if fields and fields != previous:
+                    update_ticket_fields(token, ticket_id, fields)
+                    stored["intake"] = fields
+                if not status or not find_followup_by_marker(token, ticket_id, msg_id):
+                    create_followup(token, ticket_id, message, marker=msg_id)
+                update_conversation(conn, active["conversation_id"], {
+                    "collected_fields": stored,
+                    "expires_at": time.time() + CONVERSATION_TTL_SECONDS,
                 })
-                conn.commit()
-                print("[CONVERSATION] Finished ticket detached before triage")
-
-        ai_response = None
-        if AI_TRIAGE_ENABLED:
-            ai_response = call_triage(sender_id, message_body)
-            if ai_response is None:
-                print("\n[AI TRIAGE] Service unavailable; using safe fallback.")
-                ai_response = _middleware_fallback_response()
-            elif ai_response.get("fallback_used") and ai_response.get("intent") in {
-                "greeting",
-                "unknown",
-            }:
-                ai_response["intent"] = "incident"
-
-            print(
-                "[AI TRIAGE] "
-                f"intent={ai_response.get('intent')} "
-                f"category={ai_response.get('category')} "
-                f"priority={ai_response.get('priority')} "
-                f"review={bool(ai_response.get('human_review_required'))}"
-            )
-
-            remote_write_done = status in _REMOTE_WRITE_STATUSES
-            if not remote_write_done:
-                set_message_status(conn, msg_id, sender_id, "triaged")
-                conn.commit()
-
-            active_conv = get_active_conversation(conn, sender_id)
-            if (
-                active_conv is None
-                and ai_response.get("intent") in {"greeting", "spam"}
-                and not ai_response.get("human_review_required")
-            ):
-                if ai_response.get("intent") == "greeting":
-                    _send_welcome_once(conn, sender_id)
-                print("[AI TRIAGE] Non-actionable greeting/spam handled without ticket.")
-                set_message_status(conn, msg_id, sender_id, "completed")
-                conn.commit()
-                return
-
-        session_token = session_token or get_glpi_session()
-        if not session_token:
-            raise RuntimeError("GLPI session unavailable")
-
-        if AI_TRIAGE_ENABLED:
-            _process_ai_message(
-                conn,
-                session_token,
-                sender_name,
-                sender_id,
-                message_body,
-                msg_id,
-                status,
-                retrying,
-                ai_response,
-            )
-        else:
-            active_conv = get_active_conversation(conn, sender_id)
-            existing_ticket = active_conv.get("glpi_ticket_id") if active_conv else None
-            ticket_id, created = _standard_process_flow(
-                session_token,
-                sender_name,
-                sender_id,
-                message_body,
-                msg_id,
-                existing_ticket=existing_ticket,
-                remote_write_done=status in _REMOTE_WRITE_STATUSES,
-                retrying=retrying,
-                use_legacy_mapping=False,
-            )
-            set_message_status(conn, msg_id, sender_id, "ticket_created_or_updated")
-            if active_conv is None:
-                create_conversation(
-                    conn,
-                    sender_id,
-                    str(ticket_id),
-                    "ready_for_ticket",
-                )
             else:
-                update_conversation(
-                    conn,
-                    active_conv["conversation_id"],
-                    {"expires_at": time.time() + CONVERSATION_TTL_SECONDS},
-                )
+                fields = extract(message, opening.get("name") or sender_name)
+                fields["site"] = fields["site"] or opening.get("site", "")
+                ticket_id = find_ticket_by_marker(token, msg_id) if status else None
+                if not ticket_id:
+                    ticket_id = str(create_ticket(
+                        token, sender_name, sender_id, message, marker=msg_id, fields=fields,
+                    )["id"])
+                save_mapping(ticket_id, sender_id)
+                if active:
+                    update_conversation(conn, active["conversation_id"], {"expires_at": time.time() - 1})
+                conversation_id = create_conversation(conn, sender_id, ticket_id, "ready_for_ticket")
+                update_conversation(conn, conversation_id, {"collected_fields": {"intake": fields}})
+                reply = confirmation(ticket_id, fields)
+                conn.execute("INSERT INTO intake_replies VALUES (?, ?)", (msg_id, reply))
+            set_message_status(conn, msg_id, sender_id, "ticket_created_or_updated")
             conn.commit()
-            if created or status == "reply_failed_retryable":
-                _send_ticket_reply_once(conn, sender_id, ticket_id, f"message:{msg_id}")
+            if reply and AI_TRIAGE_ENABLED:
+                _ai_pool.submit(_classify, sender_id, message, conversation_id, ticket_id)
 
+        pending = conn.execute("SELECT reply FROM intake_replies WHERE message_id=?", (msg_id,)).fetchone()
+        if pending:
+            send_whatsapp(sender_id, pending["reply"])
+            conn.execute("DELETE FROM intake_replies WHERE message_id=?", (msg_id,))
         set_message_status(conn, msg_id, sender_id, "completed")
         conn.commit()
+        return True
     except Exception as exc:
-        current_status = get_message_status(conn, msg_id)
-        retry_status = (
-            "reply_failed_retryable"
-            if current_status in _REMOTE_WRITE_STATUSES
-            else "failed_retryable"
-        )
-        set_message_status(conn, msg_id, sender_id, retry_status)
+        conn.rollback()
+        current = get_message_status(conn, msg_id)
+        set_message_status(conn, msg_id, sender_id, (
+            "reply_failed_retryable" if current in _REMOTE_WRITE_STATUSES else "failed_retryable"
+        ))
         conn.commit()
-        print(f"[MESSAGE RETRY] {msg_id}: {type(exc).__name__}")
+        print(f"[MESSAGE RETRY] {type(exc).__name__}")
+        return False
     finally:
-        kill_glpi_session(session_token)
+        kill_glpi_session(token)
         conn.close()
+
 
 _last_waha_session_status = None
 
@@ -889,56 +505,23 @@ def process_chats():
         return
 
     for chat in chats:
+        if isinstance(chat, dict):
+            message = incoming_message(chat.get("lastMessage"), chat.get("name"))
+            if message:
+                _process_chat_message(*message)
 
-        if not isinstance(chat, dict):
-            continue
-
-        last_message = chat.get("lastMessage")
-
-        if not isinstance(last_message, dict):
-            continue
-
-        msg_id_val = last_message.get("id")
-        if isinstance(msg_id_val, dict):
-            msg_id = msg_id_val.get("_serialized")
-        else:
-            msg_id = str(msg_id_val) if msg_id_val else None
-
-        if not msg_id:
-            continue
-
-        from_me = last_message.get("fromMe")
-
-        if from_me:
-            continue
-
-        sender_name = chat.get("name")
-        if not sender_name:
-            sender_name = "Unknown User"
-
-        sender_id = last_message.get("from")
-        if not isinstance(sender_id, str):
-            continue
-
-        if "@lid" not in sender_id:
-            continue
-
-        message_body = last_message.get("body", "").strip()
-        if not message_body:
-            continue
-
-        _process_chat_message(sender_name, sender_id, message_body, msg_id)
 
 # =========================================
 # CHECK GLPI FOLLOWUPS
 # =========================================
 
-def get_all_followups(session_token):
+def get_all_followups(session_token, ticket_id=None):
     followups = []
+    endpoint = f"Ticket/{int(ticket_id)}/ITILFollowup" if ticket_id else "ITILFollowup"
     start = 0
     while True:
         response = requests.get(
-            f"{GLPI_URL}/ITILFollowup",
+            f"{GLPI_URL}/{endpoint}",
             headers={"Session-Token": session_token, "App-Token": APP_TOKEN},
             params={"range": f"{start}-{start + 99}", "sort": "id", "order": "ASC"},
             verify=True,
@@ -1072,6 +655,7 @@ def check_followups():
 # =========================================
 
 if __name__ == "__main__":
+    start_webhook(_process_chat_message)
     print("\n===================================")
     print(" WAHA ↔ GLPI BRIDGE STARTED")
     print("===================================\n")
@@ -1080,11 +664,12 @@ if __name__ == "__main__":
 
         try:
 
-            poll_merges(
-                MAPPING_FILE, _get_conn, get_glpi_session, kill_glpi_session,
-                GLPI_URL, APP_TOKEN, GLPI_TIMEOUT_SECONDS, send_whatsapp,
-                has_reply_been_sent, mark_reply_sent,
-            )
+            with _intake_lock:
+                poll_merges(
+                    MAPPING_FILE, _get_conn, get_glpi_session, kill_glpi_session,
+                    GLPI_URL, APP_TOKEN, GLPI_TIMEOUT_SECONDS, send_whatsapp,
+                    has_reply_been_sent, mark_reply_sent,
+                )
 
             status_notifier.poll(
                 MAPPING_FILE, _get_conn, get_glpi_session, kill_glpi_session,

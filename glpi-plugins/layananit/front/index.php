@@ -12,6 +12,11 @@ $page = (string) ($_GET['page'] ?? 'dashboard');
 if (!in_array($page, ['dashboard','incident','request','Computer','Monitor','Printer','users','report','more'], true)) { $page = 'dashboard'; }
 $q = mb_substr(trim((string) ($_GET['q'] ?? '')), 0, 100);
 $v = PluginLayananitView::class;
+if ($page === 'incident' && isset($_GET['_ticket_rows'])) {
+    header('Cache-Control: no-store');
+    $v::incidentSearch(true);
+    return;
+}
 $report = null;
 if ($page === 'report') {
     require_once dirname(__DIR__) . '/inc/report.class.php';
@@ -20,6 +25,7 @@ if ($page === 'report') {
 }
 Html::header('Layanan TI', '', 'tools', 'pluginlayananitmenu');
 $v::header($page);
+$v::liveTickets($page);
 if ($page === 'report') { $report->render(); }
 elseif ($page === 'dashboard') { $v::dashboard(); }
 elseif ($page === 'request') { echo '<h1>Request IT</h1>'; $v::requests($q); }

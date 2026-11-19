@@ -78,6 +78,12 @@ def init_db(memory_conn=None):
                 sent_at REAL
             )
         ''')
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS intake_replies (
+                message_id TEXT PRIMARY KEY,
+                reply TEXT NOT NULL
+            )
+        """)
     if not memory_conn:
         conn.close()
         if DB_PATH not in {":memory:", ""} and not DB_PATH.startswith("file:"):
